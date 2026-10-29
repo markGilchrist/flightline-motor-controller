@@ -42,8 +42,9 @@ inline bool ledcWrite(uint8_t pin, uint32_t duty) {
 }
 inline void analogSetPinAttenuation(uint8_t, adc_attenuation_t) {}
 // GPIO1 sees VBAT through 100k/18k; 11 dB range tops out near 3.1 V
+extern uint32_t (*sim_adc_hook)(uint8_t pin);   // millivolts for pins other than GPIO1, if set
 inline uint32_t analogReadMilliVolts(uint8_t pin) {
-  if (pin != 1) return 0;
+  if (pin != 1) return sim_adc_hook ? sim_adc_hook(pin) : 0;
   float mv = sim_vbat * 18.0f / 118.0f * 1000.0f;
   return (uint32_t)std::lround(std::min(std::max(mv, 0.0f), 3100.0f));
 }
