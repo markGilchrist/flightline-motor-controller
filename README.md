@@ -45,6 +45,13 @@ An ESP32-S3 sets the motor speed and adds pauses using PWM into a low-side MOSFE
 
 Use wire rated for your motor current (1.5 mm² / 16 AWG for 10 A), keep the battery leads short, and add an inline fuse at the battery end of the + lead as well.
 
+### Using a windscreen wiper motor
+
+- Connect J2 pin 2 (+12 V) to the motor's **low-speed** terminal and J2 pin 1 (MOTOR −) to its **ground/common** terminal. Leave the high-speed and park terminals unconnected. Terminal numbering varies between makers, so identify them on a bench supply first.
+- **Check before wiring it into a car:** measure between the motor's ground terminal and its metal case. If they are connected and the case is bolted to the car body, the motor gets its ground from the chassis and this board **cannot switch it off**. In that case the motor must be mounted insulated from the body, or the board needs a high-side switch.
+- Typical currents: 2–8 A running, 15–30 A if the arm is jammed or frozen. A jam blows the 15 A fuse within a few seconds, which protects the board.
+- Pauses cut the power wherever the blades happen to be. The board does not read the motor's park switch.
+
 ## Making the board
 
 1. Zip the contents of `fab/gerbers/` and upload it to any PCB service (JLCPCB, PCBWay, OSH Park, Aisler…). Check the preview the fab shows you against `board_top.png` / `board_bottom.png`.

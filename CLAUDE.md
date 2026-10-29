@@ -12,7 +12,7 @@ Assumptions made because the request left them open (confirm with the user if yo
 
 | Topic | Assumption | Why |
 |---|---|---|
-| Motor current | **10 A continuous**, 15 A fuse | The user gave no figure. 10 A covers most small 12 V automotive motors (pumps, fans, wipers, actuators). |
+| Motor current | **10 A continuous**, 15 A fuse | Originally assumed. **Session 2: the user confirmed the largest load is a windscreen wiper motor**: typically 2–5 A running at low speed, 4–8 A at high speed, 15–30 A stalled. Ratings kept. The 15 A fuse is the only stall protection (there is no current sensing), so a jammed wiper blows it within seconds. |
 | Direction | **One direction only** (low-side switch, no H-bridge) | The request only mentioned speed and pauses. |
 | ESP32 variant | **ESP32-S3-WROOM-1-N8 module** | Native USB on GPIO19/20, so no USB-UART chip is needed; the module is pre-certified with an antenna. |
 | Programming | USB-C on the board | Works on the bench with no 12 V connected. |
@@ -311,9 +311,10 @@ Done in session 2: KiCad load, zone fill, DRC, ERC, symbol↔footprint linking, 
 1. **Compile the firmware with the real toolchain** (Arduino IDE or arduino-cli, esp32 core 3.x, "ESP32S3 Dev Module"), then bench-test it.
 2. **Open the project once in KiCad 8 or 9**, the user's likely version. Everything was checked in 7.0.11 only. Expect a format-upgrade prompt. 3D models use `${KICAD8_3DMODEL_DIR}`; the ESP32's uses `${KICAD8_3RD_PARTY}`, so it only shows if the Espressif library is installed through KiCad's Plugin and Content Manager. Rerun DRC and ERC there. Run Update PCB from Schematic: it should report no changes, since footprint paths = symbol UUIDs.
 3. **Optional cosmetic:** L1's library silk arcs overlap its pads (4 DRC silk items). This could be fixed by editing the footprint copy on the board.
-4. **Confirm the motor's real continuous and stall current with the user.**
-   - Above 10 A continuous: widen the power tracks or add copper pours on both layers, and reconsider the fuse.
-   - Stall above about 15 A: add soft-start (the firmware already ramps) or a larger fuse.
+4. **Wiper-motor questions put to the user (session 2), answers pending:**
+   - **Ground isolation.** The board switches the motor's *negative*. If the wiper motor's ground terminal is bonded to its case and the case is bolted to the car body, the motor runs uncontrolled. That case needs a high-side switch, i.e. a motor-stage redesign. On an isolated mount the current design works.
+   - **Park switch.** Pauses currently stop the blades wherever they are. Parking needs a 12 V-tolerant input (divider + clamp, or opto) for the park contact, plus firmware that stops at the park position. That is a PCB change; J4's IO5/IO6 are 3.3 V only.
+   - With stall a realistic event (ice), current sensing (below) becomes more useful: the firmware could stop the motor before the fuse blows.
 5. **Optional improvements discussed but not implemented:**
    - Swap the custom embedded symbols for standard KiCad symbols, keeping pin numbers.
    - Current sensing (shunt + amplifier into an ADC).
