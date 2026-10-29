@@ -3,7 +3,7 @@ from kiutils.board import Board
 from kiutils.items.common import Position, Net, Stroke, Effects, Font
 from kiutils.items.brditems import Segment, Via
 from kiutils.items.gritems import GrLine, GrText
-from kiutils.items.zones import Zone, ZonePolygon, FillSettings, Hatch
+from kiutils.items.zones import Zone, ZonePolygon, FillSettings, Hatch, KeepoutSettings
 from kiutils.items.common import Coordinate
 from design import PARTS, W, H, OX, OY, NETCLASS
 from geom import fp_of
@@ -121,6 +121,15 @@ def make_board(routes=None):
         z.polygons = [ZonePolygon(coordinates=[Coordinate(OX + m, OY + m), Coordinate(OX + W - m, OY + m),
                                                Coordinate(OX + W - m, OY + H - m), Coordinate(OX + m, OY + H - m)])]
         b.zones.append(z)
+    # The ESP32 footprint's own antenna keepout stops 1.25 mm short of the board edge, leaving a strip of
+    # GND pour right beside the antenna. Extend it to the top edge, 1 mm wider on each side.
+    ko = Zone(net=0, netName='', layers=['F.Cu', 'B.Cu'], tstamp=U(), name='antenna keepout to edge',
+              hatch=Hatch(style='edge', pitch=0.5), minThickness=0.25, filledAreasThickness=None,
+              keepoutSettings=KeepoutSettings(tracks='not_allowed', vias='not_allowed', pads='not_allowed',
+                                              copperpour='not_allowed', footprints='allowed'))
+    ko.polygons = [ZonePolygon(coordinates=[Coordinate(OX + x, OY + y) for x, y in
+                                            ((57.0, 0.0), (77.0, 0.0), (77.0, 7.2), (57.0, 7.2))])]
+    b.zones.append(ko)
     return b, netnum
 
 if __name__ == '__main__':

@@ -9,6 +9,9 @@ if not os.path.exists(pro):
     shutil.copy(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'motor_ctrl.kicad_pro'), pro)
 shutil.copy(src, dst)
 b = pcbnew.LoadBoard(dst)          # load from dst so the matching .kicad_pro is picked up
+# drill/place origin at the board's bottom-left corner, so fab files use board coordinates
+pts = [q for d in b.GetDrawings() if d.GetLayer() == pcbnew.Edge_Cuts for q in (d.GetStart(), d.GetEnd())]
+b.GetDesignSettings().SetAuxOrigin(pcbnew.VECTOR2I(min(q.x for q in pts), max(q.y for q in pts)))
 pcbnew.ZONE_FILLER(b).Fill(b.Zones())
 b.Save(dst)
 b = pcbnew.LoadBoard(dst)
