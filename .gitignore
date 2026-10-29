@@ -4,3 +4,4 @@ __pycache__/
 fp-info-cache
 kicad_check/
 ~*.lck
+firmware/test/build/

@@ -123,14 +123,25 @@ void loop() {
     lastV = now;
     float v = batteryVolts();
     if (!faulted && (v < V_LOW_CUT || v > V_HIGH_CUT)) {
-      faulted = true; ledcWrite(PIN_PWM, 0); currentPct = 0;
+      // hold the output at 0 while faulted; targetPct is kept so manual speed can resume
+      faulted = true; ledcWrite(PIN_PWM, 0); currentPct = startPct = 0;
       Serial.printf("FAULT: battery %.2f V - motor off\n", v);
     } else if (faulted && v > V_LOW_OK && v < V_HIGH_CUT - 0.5f) {
-      faulted = false; Serial.println("battery ok - resuming"); if (programRunning) startStep(stepIdx);
+      // resume with a ramp up from 0, never a jump straight back to the old speed
+      faulted = false; Serial.println("battery ok - resuming");
+      if (programRunning) startStep(stepIdx);
+      else rampTo(targetPct, manualRampMs);
     }
   }
 
-  if (USE_POT) { programRunning = false; targetPct = startPct = currentPct = analogRead(PIN_POT) * 100.0f / 4095.0f; }
+  if (USE_POT) {
+    // the pot sets the target; the ramp below moves to it, so turning the pot fast or recovering
+    // from a fault never steps the motor straight to full speed
+    programRunning = false;
+    float want = analogRead(PIN_POT) * 100.0f / 4095.0f;
+    if (want < 2.0f) want = 0;                 // bottom of the travel = off
+    if (fabsf(want - targetPct) > 1.0f) rampTo(want, 300);
+  }
 
   // program sequencing
   if (programRunning && !faulted) {
@@ -138,8 +149,8 @@ void loop() {
     if (now - stepStart >= s.rampMs + s.holdMs) startStep(stepIdx + 1);
   }
 
-  // ramp
-  if (!USE_POT) {
+  // ramp (frozen at 0 while faulted)
+  if (!faulted) {
     float t = min(1.0f, (now - rampStart) / (float)rampMs);
     currentPct = startPct + (targetPct - startPct) * t;
   }
