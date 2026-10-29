@@ -17,11 +17,15 @@ An ESP32-S3 sets the motor speed and adds pauses using PWM into a low-side MOSFE
 
 | File | What it is |
 |---|---|
-| `motor_ctrl.kicad_pro / .kicad_sch / .kicad_pcb` | KiCad project (opens in KiCad 7, 8 or 9) |
-| `motor_ctrl_schematic.pdf` | Schematic as a PDF |
+| `motor_ctrl.kicad_pro / .kicad_sch / .kicad_pcb` | KiCad project (opens in KiCad 7, 8 or 9). Ground pours are already filled. |
+| `motor_ctrl.kicad_sym`, `sym-lib-table` | The project's schematic symbols, so KiCad finds and can edit them |
+| `motor_ctrl_schematic.pdf` | Schematic as a PDF (plotted by KiCad) |
+| `fab/gerbers/` | **Ready-to-order** Gerbers, drill files and drill maps |
+| `fab/motor_ctrl_pos.csv` | Pick-and-place file (mm, origin at the board's bottom-left corner) |
 | `motor_ctrl_BOM.csv` | Bill of materials |
-| `board_top.png`, `board_bottom.png` | Renders of the routed board |
+| `board_top.png`, `board_bottom.png` | Renders of the Gerber files (top and bottom copper, silkscreen, drills) |
 | `firmware/motor_pwm/motor_pwm.ino` | Arduino sketch: speed program with ramps and pauses |
+| `firmware/test/` | Host-side tests for the sketch's logic (`sh firmware/test/run_tests.sh`, needs g++) |
 
 ## Key specs
 
@@ -43,10 +47,10 @@ Use wire rated for your motor current (1.5 mm² / 16 AWG for 10 A), keep the bat
 
 ## Making the board
 
-1. Open `motor_ctrl.kicad_pro` in KiCad (free, kicad.org) and open the PCB.
-2. Press **B** to fill the ground pours, then run **Inspect → Design Rules Checker**.
-3. **File → Fabrication Outputs → Gerbers** (and **Drill Files**), zip them and upload to any PCB service (JLCPCB, PCBWay, OSH Park, Aisler…).
-4. Order with **2 oz copper** and 1.6 mm thickness. The 10 A rating depends on the 4 mm power tracks being 2 oz.
+1. Zip the contents of `fab/gerbers/` and upload it to any PCB service (JLCPCB, PCBWay, OSH Park, Aisler…). Check the preview the fab shows you against `board_top.png` / `board_bottom.png`.
+2. Order with **2 oz copper** and 1.6 mm thickness. The 10 A rating depends on the 4 mm power tracks being 2 oz.
+3. Board checks already done in KiCad: DRC has no copper, clearance or courtyard errors and no unconnected pads. The only remaining items are four silkscreen warnings from the inductor L1's own library outline, which the fab trims automatically. ERC has 0 errors and 0 warnings, and the schematic and board netlists match.
+4. If you change the board in KiCad, press **B** to refill the pours, rerun **Inspect → Design Rules Checker**, and plot new Gerbers with **File → Fabrication Outputs**.
 5. All parts are standard footprints from the BOM. The SMD parts are 0603/0805 or larger, so you can hand-solder them. The SO-PowerPAD (U1) and the DPAK/D2PAK tabs need hot air or a hot plate.
 
 ## Firmware
@@ -68,6 +72,8 @@ Step program[] = {
 ```
 
 Over USB serial (115200 baud) you can also send `s 50` (set 50 %), `stop`, `go`, `r 500` (ramp time in ms) and `v` (battery voltage).
+
+If the battery drops below 10.5 V or rises above 16 V, the motor stops and the status LED blinks fast. It restarts on its own once the battery is back between 11.5 V and 15.5 V, ramping up from zero rather than jumping straight back to speed. On USB power alone the firmware sees no battery, so the motor stays off.
 
 ## Before you power it up
 

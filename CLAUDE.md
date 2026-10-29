@@ -22,23 +22,24 @@ Assumptions made because the request left them open (confirm with the user if yo
 
 ## 2. Deliverables (current state)
 
-All outputs are in `out/` in the working tree, and were also sent to the user in `ESP32_Motor_PWM_Controller.zip`.
+The project root holds the deliverables (session 2 put it under local git; see §9). Generator scripts are in `generator_scripts/`.
 
 | File | Status |
 |---|---|
-| `motor_ctrl.kicad_pro` | Project with net classes and design rules (KiCad 7/8/9) |
-| `motor_ctrl.kicad_sch` | Single A3 sheet, generated. Its netlist was verified identical to the PCB. |
-| `motor_ctrl.kicad_pcb` | Fully placed and routed, 2 GND zones (unfilled in the file; press **B** in KiCad) |
-| `motor_ctrl_schematic.pdf` | PDF rendering of the schematic (drawn with matplotlib from the same geometry, not plotted by KiCad) |
-| `motor_ctrl_BOM.csv` | Bill of materials |
-| `board_top.png`, `board_bottom.png` | Raster renders including the simulated pour fill |
+| `motor_ctrl.kicad_pro` | Project with net classes and design rules (KiCad 7/8/9). Re-saved by KiCad 7, so it carries KiCad's defaults. |
+| `motor_ctrl.kicad_sch` | Single A3 sheet, generated, **KiCad 7 file format** (opens in 7/8/9). ERC 0/0. |
+| `motor_ctrl.kicad_sym`, `sym-lib-table` | The generated symbols as a project library (`motor_ctrl:`) |
+| `motor_ctrl.kicad_pcb` | Placed, routed, **zones filled**. KiCad DRC clean apart from 4 L1 library-silk warnings. Footprints are linked to symbols. |
+| `fab/gerbers/` | Gerbers (Cu, mask, paste, silk, edge), PTH/NPTH Excellon + drill maps, job file. From `make_fab.sh`. |
+| `fab/motor_ctrl_pos.csv` | Pick-and-place, mm, origin = board bottom-left (aux origin set by `kicad_finish.py`) |
+| `motor_ctrl_schematic.pdf` | Plotted by KiCad (`kicad-cli sch export pdf`) |
+| `motor_ctrl_BOM.csv` | Bill of materials (unchanged in session 2) |
+| `board_top.png`, `board_bottom.png` | gerbv renders of the Gerbers (copies of `fab/gerber_*.png`) |
 | `firmware/motor_pwm/motor_pwm.ino` | Arduino-ESP32 core 3.x sketch |
+| `firmware/test/` | Host build against a mock Arduino API + simulation tests (`sh firmware/test/run_tests.sh`) |
 | `README.md` | User-facing build, wiring and flashing guide |
 
-**Not yet done:**
-- No Gerbers. KiCad was not available in the build environment.
-- The board has never been opened in real KiCad.
-- No KiCad DRC or ERC has been run (see §8).
+**Still not done:** no build with the real ESP32-S3 toolchain, and nothing has been opened in KiCad 8/9 (only 7.0.11). See §8.
 
 ---
 
@@ -171,7 +172,7 @@ Pad numbering conventions used:
 - **Mounting holes:** four M3 holes at (4, 4), (88, 4), (4, 40), (88.5, 40).
 - **Floor plan:**
   - Top half is logic: buck converter top-left, USB-C on the top edge at x≈44, ESP32 module top-right with its antenna overhanging the top edge region.
-  - An antenna keepout (no copper on either layer) covers x 56–78, y 0–7.4.
+  - Antenna keepout, no copper on either layer: the ESP32 footprint's own rule area covers x 58–76, y 1.25–7.2. A board-level rule area added in session 2 (`build_pcb.py`, "antenna keepout to edge") extends it to x 57–77, y 0–7.2. Without it a 1 mm strip of GND pour ran along the antenna at the board edge.
   - Bottom half is power: J1 and F1 bottom-left, Q1, bulk caps, then Q2, D3 and J2 bottom-right.
 - **Net classes** (defined in `design.py` → `NETCLASS`, mirrored in `.kicad_pro`):
 
@@ -186,7 +187,7 @@ Pad numbering conventions used:
 - **High-current copper:** hand-routed and locked, in `power_routes.py` (`TRACKS`, `VIAS`).
   - 4 mm top-layer tracks carry battery → fuse → Q1 → V12 bus at y≈38 → caps, D3 and J2.
   - A 5 mm bottom-layer GND bus runs from J1 to Q2's source.
-  - V12 to J2 is duplicated on both layers.
+  - V12 to J2 is duplicated on both layers. The bottom copy starts at the via at (82.4, 52.5), not under D3's top-only tab, which left a dangling end.
 - **USB-C breakout:** also hand-routed and locked, in `power_routes.py` after the comment "USB-C breakout".
   - This connector has interleaved doubled D+/D− pads.
   - D+ pads B6 and A6 are joined below the pads, dropped to the bottom layer, and brought up into U4.3. U4.4 then goes on the top layer to ESP pin 14.
@@ -195,57 +196,78 @@ Pad numbering conventions used:
 - **Everything else:** autorouted with **Freerouting 2.1.0** using a Specctra DSN written by `dsn.py`.
   - **GND is excluded from autorouting** (`SKIP_NETS` in `dsn.py`) and is carried by full GND pours on both layers instead.
   - Zones: clearance 0.4, min width 0.25, island removal on, `connect_pads thru_hole_only` (solid to SMD, thermal reliefs on THT).
+  - Footprint overrides (session 2, `build_pcb.py`): **J3** clearance 0.2 mm, because the USB-C VBUS/GND pads are 0.2 mm apart by design against the 0.25 mm Supply class. **U1** zone connection solid, because its exposed-pad thermal vias starved with reliefs.
 - **Ground fixes:** four GND pads that the top pour couldn't reach (C7/C8, C14/C15, D7/R14, C16) each got a short track plus a via down to the bottom pour (`fixgnd.py` → `fix_tracks`, `fix_vias`).
 - **Stitching:** 132 GND stitching vias (0.6/0.3) on a 5 mm grid, placed only where both layers are solid pour (`stitch.py`).
-- **Final routing data:** `out/routes_final.json`, with keys `tracks`, `vias`, `fix_tracks`, `fix_vias`, `stitch`, in board-relative mm.
+- **Final routing data:** `generator_scripts/routes_final.json`, with keys `tracks`, `vias`, `fix_tracks`, `fix_vias`, `stitch`, in board-relative mm.
+- **Silkscreen:** `place_refs.py` moves reference designators off pads and other silk (24 moved) and hides the mounting-hole refs. J4 has one label per pin.
 
 ---
 
 ## 5. Toolchain and how to regenerate
 
-The working tree is `/home/claude/gen` in the cloud session; the zip has the same scripts in `generator_scripts/`. Everything is generated from one source of truth: **`design.py`** (parts, footprints, placement, pad→net maps, net classes).
+Scripts are in `generator_scripts/` (run them from the project root or that folder; paths below are from the project root). Everything is generated from one source of truth: **`design.py`** (parts, footprints, placement, pad→net maps, net classes, `sym_uuid()`).
 
 | Script | Purpose |
 |---|---|
 | `design.py` | Parts list. Each `P(ref, value, footprint, x, y, rot, {pad: net}, kind, mpn, note)`. Board size, net classes. |
 | `power_routes.py` | Locked hand-routed tracks and vias (power and USB). `all_vias()` returns `(net, x, y, size, drill)`. |
-| `fplib.py`, `geom.py` | Load KiCad footprints via kiutils; absolute pad geometry; courtyards. **`fplib.py` has hard-coded library paths, see below.** |
+| `fplib.py`, `geom.py` | Load KiCad footprints via kiutils; absolute pad geometry; courtyards. Library paths come from `KICAD_FP_DIR` and `ESP_FP_DIR` (see Dependencies). |
 | `dsn.py` | Writes the Specctra DSN (locked wires as `protect`; GND skipped) and reads the `.ses` result back. |
 | `route.py` | Runs `java -jar freerouting-2.1.0.jar -de out/motor_ctrl.dsn -do out/motor_ctrl.ses -mp N`, then writes `out/routes.json`. Takes about 3–9 min. |
 | `fixgnd.py in.json out.json` | Finds isolated GND pads and adds a pad → via link to the bottom pour. |
 | `stitch.py in.json out.json` | Adds GND stitching vias. |
-| `build_pcb.py out.kicad_pcb routes.json` | Builds the `.kicad_pcb`: footprints with nets and MPN property, outline, silk text, tracks, vias, zones. Board file version 20221018. |
-| `gen_sch.py out.kicad_sch` | Builds the KiCad 8 schematic (embedded custom `motor_ctrl:` lib symbols, a wire stub plus net label on every pin, GND power symbols, no-connect flags) and the PDF. |
-| `verify_sch.py` | Re-derives connectivity from the schematic geometry and compares it to `design.py`. Expected: 0 mismatches, 0 merged nets, 0 T-junctions. |
+| `build_pcb.py out.kicad_pcb routes.json` | Builds the `.kicad_pcb`: footprints with nets, MPN property and symbol path, outline, silk text, tracks, vias, GND zones, antenna keepout. Board file version 20221018 (KiCad 7). |
+| `place_refs.py in.kicad_pcb out.kicad_pcb` | (pcbnew) Moves silk reference designators to clean spots. |
+| `kicad_finish.py in.kicad_pcb out.kicad_pcb drc.rpt` | (pcbnew) Sets the drill/place origin, fills zones, saves, writes the KiCad DRC report and prints a summary. |
+| `make_fab.sh [pcb] [outdir]` | (kicad-cli) Gerbers, drill files + maps and pick-and-place into `fab/`. |
+| `gen_sch.py out.kicad_sch` | Builds the schematic in KiCad 7 format: embedded `motor_ctrl:` symbols, a wire stub plus net label on every pin, GND symbols, PWR_FLAGs, no-connects. Also writes `motor_ctrl.kicad_sym` and `sym-lib-table` next to it, and the PDF (kicad-cli if present, else matplotlib). UUIDs are deterministic, so regenerating is byte-identical. |
+| `verify_sch.py` | Re-derives connectivity from the schematic geometry and compares it to `design.py`. Expected: 0 mismatches, 0 merged nets, 0 T-junctions, PWR_FLAGs not misplaced. |
+| `compare_sch_pcb.py net pcb` | (pcbnew) KiCad-exported schematic netlist vs board: nets, values, footprints and symbol↔footprint links. Prints `MATCH`. |
+| `run_erc_gui.sh /abs/path.kicad_sch` | Real KiCad 7 ERC, headless (Xvfb + xdotool click-through), writes `ERC.rpt`. On KiCad 8+ use `kicad-cli sch erc` instead. |
 | `check.py [routes.json]` | Raster DRC at 0.025 mm per layer: shorts, clearance (routed copper only), edge clearance, simulated GND pour, connectivity. Writes `out/check.png`. |
 | `exact_drc.py routes.json` | Exact vector clearance check (tracks/vias against everything; pads treated as rectangles, so it is conservative). |
 | `make_bom.py` | Writes `out/motor_ctrl_BOM.csv`. |
 | `render.py`, `render_final.py`, `preview.py` | Debug and fab-style renders. |
 
-**Pipeline used for the final board:**
+**Routing pipeline (session 1; not re-run in session 2):**
 
 ```bash
-export PYTHONPATH=<kiutils>/src
 python3 route.py 120                                   # → out/routes.json
 python3 fixgnd.py out/routes.json out/routes_fixed.json
 # manual edit made: FB track y 20.3352 → 20.3852 (0.235 mm to C11 GND pad, needed 0.25)
 python3 stitch.py out/routes_fixed.json out/routes_final.json
 python3 exact_drc.py out/routes_final.json             # expect 0
 python3 check.py out/routes_final.json                 # expect shorts [] and unconnected {}
-python3 build_pcb.py out/motor_ctrl.kicad_pcb out/routes_final.json
-python3 gen_sch.py out/motor_ctrl.kicad_sch && python3 verify_sch.py
-python3 make_bom.py && python3 render_final.py
 ```
+
+**Build and check pipeline (session 2), from the project root:**
+
+```bash
+export KICAD_FP_DIR=/home/user/vendor/fp ESP_FP_DIR=/home/user/vendor/esp
+G=generator_scripts; K=kicad_check; mkdir -p $K
+python3 $G/build_pcb.py $K/built.kicad_pcb $G/routes_final.json
+python3 $G/place_refs.py $K/built.kicad_pcb $K/placed.kicad_pcb
+python3 $G/kicad_finish.py $K/placed.kicad_pcb motor_ctrl.kicad_pcb $K/drc.rpt   # expect only 4 L1 silk items, 0 unconnected
+sh $G/make_fab.sh
+python3 $G/gen_sch.py motor_ctrl.kicad_sch && (cd $G && python3 verify_sch.py)
+sh $G/run_erc_gui.sh $PWD/motor_ctrl.kicad_sch && mv ERC.rpt $K/                    # expect 0 errors 0 warnings
+kicad-cli sch export netlist -o $K/motor_ctrl.net motor_ctrl.kicad_sch
+python3 $G/compare_sch_pcb.py $K/motor_ctrl.net motor_ctrl.kicad_pcb                # expect MATCH
+sh firmware/test/run_tests.sh                                                       # expect ALL PASSED twice
+```
+
+`kicad_check/` is git-ignored scratch. `make_bom.py` and the old render scripts were not re-run (the BOM did not change).
 
 Re-running `route.py` gives a different route. If you re-route, redo the FB nudge and every later step. Also note that `fixgnd.py` and `stitch.py` run after routing, so moving parts invalidates them.
 
 **Dependencies:**
-- **kiutils:** run from source with `PYTHONPATH`.
-- **Python packages:** numpy, scipy, opencv-python, matplotlib, Pillow.
-- **Java 17+** with `freerouting-2.1.0.jar`.
-- **KiCad footprint libraries** (official `kicad-footprints` repo) and the **Espressif KiCad library** (for `Espressif:ESP32-S3-WROOM-1`).
-- In the cloud session these lived in `/home/claude/vendor/{kiutils,fp,esp,fr}`. **On a new machine, edit `fplib.py`** so `fp_path()` points at the local KiCad footprint folder and the Espressif `.pretty`.
-- The build environment had no KiCad and no PyPI access, which is why DRC and fill were simulated rather than done in KiCad.
+- **KiCad 7.0.11** (Ubuntu 24.04 `apt install kicad`): pcbnew Python module, `kicad-cli`, eeschema. For headless ERC also `xvfb` and `xdotool`. `gerbv` for Gerber renders.
+- **kiutils** 1.4.8 from PyPI (`pip install kiutils`).
+- **Footprint libraries — exact versions matter.** The board was built from the **KiCad 5.1.12** `kicad-footprints` library, plus `SOT-23-5` and `SOT-23-6` from commit `55eb773dc2a8` of the same GitLab repo (Sep 2020, the scripted SOT-23 rewrite). Newer libraries change pad shapes (rect → roundrect) and SOT-23 pads, so the routing would no longer match. Session 2 rebuilt that mix in `/home/user/vendor/fp` (sparse clone of tag 5.1.12 plus the two files from the GitLab API) and confirmed the rebuild matches the delivered board apart from UUIDs.
+- **Espressif library:** `ESP32-S3-WROOM-1.kicad_mod` from `espressif/kicad-libraries` main, in `/home/user/vendor/esp`.
+- `fplib.py` reads `KICAD_FP_DIR` (folder of `*.pretty`) and `ESP_FP_DIR`; the defaults are the paths above.
+- For routing only: Java 17+ with `freerouting-2.1.0.jar`; numpy, scipy, opencv-python, matplotlib and Pillow for the check/render scripts.
 
 ---
 
@@ -257,11 +279,12 @@ Re-running `route.py` gives a different route. If you re-route, redo the FB nudg
 - **Speed program:** the `program[]` table of `{speedPct, rampMs, holdMs}` loops forever. A speed of 0 is a pause. Ramps are linear.
 - **Battery protection:** samples every 100 ms (16-sample average via `analogReadMilliVolts`).
   - Motor cuts below 10.5 V or above 16 V.
-  - It resumes above 11.5 V (and below 15.5 V).
+  - It resumes above 11.5 V (and below 15.5 V), **ramping up from 0**. The ramp is frozen at 0 while faulted (session 2 fix; before that it jumped straight back to the old duty).
 - **Serial at 115200:** `s <0-100>` sets speed and stops the program, `r <ms>` sets the ramp time, `go`, `stop`, `v` prints the voltage.
-- **Optional pot:** set `USE_POT = true` to control speed from a pot on IO5 (J4).
+- **Optional pot:** set `USE_POT = true` to control speed from a pot on IO5 (J4). The pot sets the target and the output ramps to it over 300 ms; the bottom 2% of travel means off.
 - **Status LED:** blinks slowly while running, fast on a fault.
-- Not compiled in this environment. **Compile and test it.**
+- **Tests:** `firmware/test/run_tests.sh` compiles the sketch with host g++ (`-Wall -Wextra -Werror`) against `firmware/test/mock/Arduino.h`. That mock follows the arduino-esp32 3.3.x signatures for ledc, ADC, `min` and `constrain`. The tests run it in simulated time, once as shipped and once with `USE_POT = true`.
+- **Not yet compiled with the real ESP32-S3 toolchain:** the PlatformIO registry and dl.espressif.com were blocked in the session 2 environment.
 
 ---
 
@@ -269,40 +292,37 @@ Re-running `route.py` gives a different route. If you re-route, redo the FB nudg
 
 | Check | Result |
 |---|---|
-| Schematic netlist vs `design.py` (`verify_sch.py`) | 0 mismatches, 0 accidental merges, no wire T-junctions |
-| Raster connectivity including the simulated GND pour (`check.py`) | All nets connected, no shorts, no edge violations |
-| Exact clearance (`exact_drc.py`) | 0 violations |
-| Raster clearance | 2 flags (BOOT/VCC_BUCK near U1 at (19.4, 14.5); EN/PWM near U3 at (57.2, 13.1)). Both are sampling artefacts; the exact check passes them. Confirm in KiCad DRC. |
-| Courtyard overlaps / parts outside the board (`preview.py`) | None |
-| Footprint pads vs pin maps | Every pad has a pin entry (mounting holes excluded) |
-| Electrical review | Pinouts checked for ESP32-S3-WROOM-1, LMR33630 (SO PowerPAD), UCC27517A (SOT-23-5), USBLC6-2SC6, the TO-252/D2PAK tabs, and the P-FET orientation (drain on the battery side) |
+| **KiCad 7.0.11 DRC** after zone fill (`kicad_finish.py`) | 0 unconnected pads; no clearance, courtyard, edge, thermal or dangling-track errors. Remaining: 3 `silk_over_copper` + 1 `silk_overlap` from L1's own library silk arcs (cosmetic; fabs clip silk at pads). `lib_footprint_issues` only means no fp-lib-table on the build machine. The 2 raster-clearance flags from session 1 do not show in real DRC. |
+| Antenna keepout | Probed the filled zones: 0 copper inside x 57.2–77, y 0.4–7.2 on both layers |
+| **KiCad ERC** (eeschema 7.0.11) | 0 errors, 0 warnings (before PWR_FLAGs: 4 "power input not driven") |
+| KiCad netlist vs board (`compare_sch_pcb.py`) | MATCH: 59/59 components (value + footprint), 30/30 nets, 59/59 symbol↔footprint links. Checked that it catches a swapped pin and a wrong value. |
+| Schematic geometry vs `design.py` (`verify_sch.py`) | 0 mismatches, 0 merged nets, 0 T-junctions, 4 PWR_FLAGs on the right nets |
+| Rebuild reproducibility | Rebuilding the delivered board with the pinned libraries matched it item for item apart from UUIDs. Session 2's board differs from the delivered one only by the intended changes (one V12 track, J3/U1 overrides, keepout, silk, paths). |
+| Gerbers | Plotted by kicad-cli and rendered independently with gerbv (`fab/gerber_*.png`); vias, pours, keepout and silk checked visually |
+| Firmware (host) | Compiles warning-free against the mock API; all simulation tests pass, shipped and pot builds |
+| Electrical review (session 1) | Pinouts checked for ESP32-S3-WROOM-1, LMR33630 (SO PowerPAD), UCC27517A (SOT-23-5), USBLC6-2SC6, the TO-252/D2PAK tabs, and the P-FET orientation (drain on the battery side) |
 
 ---
 
 ## 8. Open items and recommended next steps (priority order)
 
-1. **Open in KiCad 8/9.** Check that the `.kicad_pcb`, `.kicad_sch` and `.kicad_pro` load cleanly. The files were written by kiutils and hand-built s-expressions and have never been opened in KiCad. Watch for:
-   - Footprint 3D model paths (rewritten to `${KICAD8_3DMODEL_DIR}`).
-   - The ESP32 footprint's embedded keepout zone.
-   - Net-class pattern assignment from `.kicad_pro`.
-2. **Fill zones (B) and run KiCad DRC.** Fix anything the simulated checks missed: thermal-relief spoke failures on THT GND pads, silk over pads, courtyard rules, solder-mask bridges at the 0.5 mm-pitch USB-C pads.
-3. **Run ERC on the schematic.**
-   - Expected warnings: power-input pins not driven (add `PWR_FLAG` on V12, +3V3, GND and VBUS), and label-only nets.
-   - The custom lib symbols are embedded in the schematic. Consider swapping in standard KiCad symbols, keeping pin numbers the same.
-4. **Do Update PCB from Schematic** in KiCad to link symbols to footprints (UUIDs). The board and schematic were generated separately, so they aren't yet annotated together. Check that it only reports matching, with no changes.
-5. **Generate Gerbers and drill files**, and preview them in KiCad's Gerber viewer or the fab house's viewer.
-6. **Compile the firmware.**
-7. **Confirm the motor's real continuous and stall current with the user.**
+Done in session 2: KiCad load, zone fill, DRC, ERC, symbol↔footprint linking, Gerbers and drill files, and host-side firmware tests (see §7, §9).
+
+1. **Compile the firmware with the real toolchain** (Arduino IDE or arduino-cli, esp32 core 3.x, "ESP32S3 Dev Module"), then bench-test it.
+2. **Open the project once in KiCad 8 or 9**, the user's likely version. Everything was checked in 7.0.11 only. Expect a format-upgrade prompt. 3D models use `${KICAD8_3DMODEL_DIR}`; the ESP32's uses `${KICAD8_3RD_PARTY}`, so it only shows if the Espressif library is installed through KiCad's Plugin and Content Manager. Rerun DRC and ERC there. Run Update PCB from Schematic: it should report no changes, since footprint paths = symbol UUIDs.
+3. **Optional cosmetic:** L1's library silk arcs overlap its pads (4 DRC silk items). This could be fixed by editing the footprint copy on the board.
+4. **Confirm the motor's real continuous and stall current with the user.**
    - Above 10 A continuous: widen the power tracks or add copper pours on both layers, and reconsider the fuse.
    - Stall above about 15 A: add soft-start (the firmware already ramps) or a larger fuse.
-8. **Optional improvements discussed but not implemented:**
+5. **Optional improvements discussed but not implemented:**
+   - Swap the custom embedded symbols for standard KiCad symbols, keeping pin numbers.
    - Current sensing (shunt + amplifier into an ADC).
    - Reverse direction (H-bridge).
    - A clamp diode on VSENSE (a 32 V transient puts about 4.9 V on GPIO1, limited by R13 to ≈0.3 mA).
    - CAN or LIN, or an ignition-sense input.
    - Conformal coating for in-car use.
    - R4 sees about 1.8 W briefly during a load dump. It is fine for transients, but upsize it to a 2512 for margin.
-9. **Before first power-up:** current-limited 12 V supply, no motor. Check the 3.3 V rail, then add the motor.
+6. **Before first power-up:** current-limited 12 V supply, no motor. Check the 3.3 V rail, then add the motor.
 
 ---
 
@@ -321,3 +341,14 @@ Re-running `route.py` gives a different route. If you re-route, redo the FB nudg
 7. **Schematic generator written.** Fixed an IN− GND stub that would have landed on the VDD stub (a false short), and rotated GND-on-pin-1 passives by 180° so every GND uses a power symbol.
 
 Backups of the pre-USB-fix files: `design_v1_backup.py`, `power_routes_v1_backup.py`. Earlier route sets: `routes_v1.json` (first run), `routes_v2.json` (second run), `routes.json` (GND-skipped run), `routes_fixed.json`, `routes_final.json`.
+
+### Session 2 (KiCad verification and fab outputs)
+
+The project is a local git repo; each step below is one commit. Nothing was pushed.
+
+1. Installed KiCad 7.0.11 from Ubuntu. The KiCad 8/9 PPA, micromamba and arduino-cli downloads were blocked. Found the exact footprint library mix the board was built from (§5) and proved the rebuild reproduces it.
+2. First real DRC: 8 USB-C clearance errors (pad pitch), 4 starved thermals on U1's EP vias, 1 dangling V12 track, about 60 silk items. Fixed at the source (`build_pcb.py`, `power_routes.py`, new `place_refs.py`). Zones are now filled in the delivered board.
+3. Found in the Gerber render: GND pour between the antenna and the board edge. Added the board-level keepout to the edge.
+4. Gerbers, drills and pick-and-place via `make_fab.sh`, with origin at the board's bottom-left.
+5. The schematic was KiCad 8 format, so KiCad 7 couldn't read it. Switched `gen_sch.py` to the KiCad 7 format. The real ERC gave 4 power-not-driven errors; added PWR_FLAGs (GND, VIN_BUCK, +3V3, VDRV). Wrote a project symbol library, deterministic UUIDs, and footprint paths for linking. Readability fixes: vertical ref/value on two-pin parts, joined stacked pairs, chained GND pins, R16/D8 moved. The PDF is now plotted by KiCad.
+6. Firmware: host mock and tests found a fault-recovery jump to full duty. Fixed it, and pot mode now ramps.
