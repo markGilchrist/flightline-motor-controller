@@ -34,6 +34,7 @@ An ESP32-S3 sets the motor speed and adds pauses using PWM into a low-side MOSFE
 - **PWM:** 20 kHz (silent), 10-bit, from GPIO4 through a UCC27517 4 A gate driver, so the MOSFET switches cleanly from a 3.3 V pin. R5 holds the motor **off** while the ESP32 boots or resets.
 - **Freewheel diode:** D3 (STPS20L45CG, 2 × 10 A Schottky) across the motor absorbs the inductive kick at every PWM edge.
 - **Logic power:** LMR33630 synchronous buck, 3.3 V / 3 A, runs from the battery or from USB-C. You can program the board on the bench with only a USB cable; the motor won't run without 12 V.
+- **Wiper park input:** J5 takes the motor's park-switch contact (12 V tolerant, read on GPIO7), so pauses can stop the blades in the parked position.
 - **Extras:** battery-voltage sense on GPIO1 (low/high-voltage cut-out in firmware), status LED on GPIO2, power LED, RESET and BOOT buttons, and a 4-pin AUX header (3V3, GPIO5, GPIO6, GND) for a speed pot, button or sensor.
 
 ## Wiring
@@ -42,15 +43,23 @@ An ESP32-S3 sets the motor speed and adds pauses using PWM into a low-side MOSFE
 |---|---|---|
 | **J1 BATTERY** | +12 V (from battery +) | GND (battery −) |
 | **J2 MOTOR** | MOTOR − | MOTOR + (+12 V) |
+| **J5 PARK** | Park-switch contact | GND |
 
 Use wire rated for your motor current (1.5 mm² / 16 AWG for 10 A), keep the battery leads short, and add an inline fuse at the battery end of the + lead as well.
 
 ### Using a windscreen wiper motor
 
-- Connect J2 pin 2 (+12 V) to the motor's **low-speed** terminal and J2 pin 1 (MOTOR −) to its **ground/common** terminal. Leave the high-speed and park terminals unconnected. Terminal numbering varies between makers, so identify them on a bench supply first.
-- **Check before wiring it into a car:** measure between the motor's ground terminal and its metal case. If they are connected and the case is bolted to the car body, the motor gets its ground from the chassis and this board **cannot switch it off**. In that case the motor must be mounted insulated from the body, or the board needs a high-side switch.
+- Connect J2 pin 2 (+12 V) to the motor's **low-speed** terminal and J2 pin 1 (MOTOR −) to its **ground/common** terminal. Leave the high-speed terminal unconnected. Terminal numbering varies between makers, so identify them on a bench supply first.
+- **Mounting:** the board switches the motor's negative wire. If the motor's ground terminal is connected to its metal case, the case must not touch anything wired to battery negative (a metal frame, a car body). Otherwise the motor gets its ground directly and the board can't stop it. Check with a meter between the ground terminal and the case.
 - Typical currents: 2–8 A running, 15–30 A if the arm is jammed or frozen. A jam blows the 15 A fuse within a few seconds, which protects the board.
-- Pauses cut the power wherever the blades happen to be. The board does not read the motor's park switch.
+
+**Park switch (J5).** With it connected, every pause, `stop` command and the pot turned to zero first runs the wiper on to its park position, then stops.
+
+- **Park contact that closes to ground at park:** wire it between J5 pin 1 and J5 pin 2 (GND).
+- **Car-style motor with a 31b park terminal** (it switches between 53a and the motor's ground): wire **31b to J5 pin 1** only. 53a can stay unconnected.
+- **Contact that opens at park:** wire it like the first case and set `PARK_INVERT = true` in the sketch.
+- To check the wiring, send `v` over USB serial with 12 V connected. It reports the park-input voltage and whether it reads "at park". Move the blades by hand, or run the motor slowly with `s 30`, and watch it change.
+- If the firmware never sees the park position within 6 s (for example J5 isn't wired), it stops the motor where it is and prints a warning. Set `USE_PARK = false` if you don't use the park switch.
 
 ## Making the board
 
@@ -78,7 +87,7 @@ Step program[] = {
 };
 ```
 
-Over USB serial (115200 baud) you can also send `s 50` (set 50 %), `stop`, `go`, `r 500` (ramp time in ms) and `v` (battery voltage).
+Over USB serial (115200 baud) you can also send `s 50` (set 50 %), `stop`, `go`, `r 500` (ramp time in ms) and `v` (battery and park-input voltage).
 
 If the battery drops below 10.5 V or rises above 16 V, the motor stops and the status LED blinks fast. It restarts on its own once the battery is back between 11.5 V and 15.5 V, ramping up from zero rather than jumping straight back to speed. On USB power alone the firmware sees no battery, so the motor stays off.
 

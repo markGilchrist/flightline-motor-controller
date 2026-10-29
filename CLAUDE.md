@@ -14,6 +14,8 @@ Assumptions made because the request left them open (confirm with the user if yo
 |---|---|---|
 | Motor current | **10 A continuous**, 15 A fuse | Originally assumed. **Session 2: the user confirmed the largest load is a windscreen wiper motor**: typically 2–5 A running at low speed, 4–8 A at high speed, 15–30 A stalled. Ratings kept. The 15 A fuse is the only stall protection (there is no current sensing), so a jammed wiper blows it within seconds. |
 | Direction | **One direction only** (low-side switch, no H-bridge) | The request only mentioned speed and pauses. |
+| Mounting | Low-side switching is OK | Session 2: the user said the motor is not in a car; it sits in another device and connects by spade connectors. It still must not have its case bonded to anything at battery negative (README says so). |
+| Park switch | **Wanted** | Session 2: the user asked for the blades to park during pauses. J5 park input + firmware parking added. |
 | ESP32 variant | **ESP32-S3-WROOM-1-N8 module** | Native USB on GPIO19/20, so no USB-UART chip is needed; the module is pre-certified with an antenna. |
 | Programming | USB-C on the board | Works on the bench with no 12 V connected. |
 | Copper | **2 oz**, 1.6 mm FR-4, 2 layers | Needed for the 4 mm power tracks to carry 10 A. |
@@ -29,11 +31,11 @@ The project root holds the deliverables (session 2 put it under local git; see �
 | `motor_ctrl.kicad_pro` | Project with net classes and design rules (KiCad 7/8/9). Re-saved by KiCad 7, so it carries KiCad's defaults. |
 | `motor_ctrl.kicad_sch` | Single A3 sheet, generated, **KiCad 7 file format** (opens in 7/8/9). ERC 0/0. |
 | `motor_ctrl.kicad_sym`, `sym-lib-table` | The generated symbols as a project library (`motor_ctrl:`) |
-| `motor_ctrl.kicad_pcb` | Placed, routed, **zones filled**. KiCad DRC clean apart from 4 L1 library-silk warnings. Footprints are linked to symbols. |
+| `motor_ctrl.kicad_pcb` | Placed, routed, **zones filled**. KiCad DRC clean. Footprints are linked to symbols. Includes the J5 wiper park input. |
 | `fab/gerbers/` | Gerbers (Cu, mask, paste, silk, edge), PTH/NPTH Excellon + drill maps, job file. From `make_fab.sh`. |
 | `fab/motor_ctrl_pos.csv` | Pick-and-place, mm, origin = board bottom-left (aux origin set by `kicad_finish.py`) |
 | `motor_ctrl_schematic.pdf` | Plotted by KiCad (`kicad-cli sch export pdf`) |
-| `motor_ctrl_BOM.csv` | Bill of materials (unchanged in session 2) |
+| `motor_ctrl_BOM.csv` | Bill of materials (`make_bom.py motor_ctrl_BOM.csv`) |
 | `board_top.png`, `board_bottom.png` | gerbv renders of the Gerbers (copies of `fab/gerber_*.png`) |
 | `firmware/motor_pwm/motor_pwm.ino` | Arduino-ESP32 core 3.x sketch |
 | `firmware/test/` | Host build against a mock Arduino API + simulation tests (`sh firmware/test/run_tests.sh`) |
@@ -100,6 +102,12 @@ ESP32 GPIO4 (PWM) → U2 UCC27517A → R2 10Ω → Q2 gate
 - **LEDs:** D7 green status LED via R15 1k on IO2; D8 red power LED via R16 1k on 3V3.
 - **J4:** 1×4 header with 3V3, IO5, IO6, GND. Intended for a speed pot, button or sensor.
 
+**Wiper park input (session 2)**
+- **J5:** Phoenix PT 1,5/2-3,5-H, 3.5 mm pitch. Pin 1 PARK, pin 2 GND.
+- **R17 4k7 (1206):** pull-up from V12 to PARK. An open contact reads 12 V, and the cam contact gets about 3 mA of wetting current (0.2 W at a 32 V load dump into a grounded contact).
+- **R18 100k / R19 10k (1%):** PARK_ADC = PARK / 11, so 32 V → 2.9 V and no clamp is needed. **C18 470 nF:** τ = 9.1 k × 470 n = 4.3 ms. It removes the 20 kHz ripple that a 31b-style contact (switched to MOTOR_N) passes through.
+- **IO7** (module pin 7, ADC1_CH6). The firmware compares PARK with the battery voltage (§6).
+
 **USB-C (programming)**
 - **J3:** HRO TYPE-C-31-M-12.
 - **R11, R12:** 5.1k CC pull-downs. R11 is on CC2 and R12 on CC1; they were swapped during layout to suit placement, which makes no electrical difference.
@@ -115,6 +123,7 @@ ESP32 GPIO4 (PWM) → U2 UCC27517A → R2 10Ω → Q2 gate
 | 4 | IO4 | PWM | Motor PWM out (LEDC, 20 kHz, 10-bit) |
 | 5 | IO5 | IO5 | AUX J4 pin 2 (optional speed pot) |
 | 6 | IO6 | IO6 | AUX J4 pin 3 |
+| 7 | IO7 | PARK_ADC | Wiper park input (J5 via R18/R19/C18), ADC |
 | 13 | IO19 | USB_DM | Native USB D− |
 | 14 | IO20 | USB_DP | Native USB D+ |
 | 27 | IO0 | IO0 | Boot strap / BOOT button |
@@ -136,20 +145,22 @@ GATE      Q2.1 R2.2 R3.1
 GATE_DRV  R2.1 U2.5
 GND       C1.2 C11.2 C12.2 C13.2 C14.2 C15.2 C16.2 C17.2 C2.2 C3.1 C4.1 C5.2 C6.1 C7.2 C8.2 C9.2 D1.1 D4.2 D7.1 D8.1
           J1.2 J3.A1 J3.A12 J3.B1 J3.B12 J3.S1 J4.4 Q2.3 R1.2 R11.2 R12.2 R14.2 R3.2 R5.2 R8.2 SW1.2 SW2.2
-          U1.1 U1.9 U2.2 U2.4 U3.1 U3.40 U3.41 U4.2
+          U1.1 U1.9 U2.2 U2.4 U3.1 U3.40 U3.41 U4.2  C18.2 J5.2 R19.2
 IO0       R10.2 SW2.1 U3.27
 IO5       J4.2 U3.5
 IO6       J4.3 U3.6
 LED       R15.1 U3.38
 LED_A     D7.2 R15.2
 MOTOR_N   D3.1 D3.3 J2.1 Q2.2
+PARK      J5.1 R17.2 R18.1
+PARK_ADC  C18.1 R18.2 R19.1 U3.7
 PWM       R5.1 U2.3 U3.4
 PWR_A     D8.2 R16.2
 QG_REV    D2.2 Q1.1 R1.1
 SW        C10.2 L1.1 U1.8
 USB_DM    J3.A7 J3.B7 U3.13 U4.1 U4.6
 USB_DP    J3.A6 J3.B6 U3.14 U4.3 U4.4
-V12       C1.1 C2.1 C3.2 C4.2 D2.1 D3.2 D5.2 J2.2 Q1.3 R13.1 R4.1
+V12       C1.1 C2.1 C3.2 C4.2 D2.1 D3.2 D5.2 J2.2 Q1.3 R13.1 R17.1 R4.1
 VBAT_F    D1.2 F1.2 Q1.2
 VBAT_IN   F1.1 J1.1
 VBUS      D6.2 J3.A4 J3.A9 J3.B4 J3.B9 U4.5
@@ -198,9 +209,10 @@ Pad numbering conventions used:
   - Zones: clearance 0.4, min width 0.25, island removal on, `connect_pads thru_hole_only` (solid to SMD, thermal reliefs on THT).
   - Footprint overrides (session 2, `build_pcb.py`): **J3** clearance 0.2 mm, because the USB-C VBUS/GND pads are 0.2 mm apart by design against the 0.25 mm Supply class. **U1** zone connection solid, because its exposed-pad thermal vias starved with reliefs.
 - **Ground fixes:** four GND pads that the top pour couldn't reach (C7/C8, C14/C15, D7/R14, C16) each got a short track plus a via down to the bottom pour (`fixgnd.py` → `fix_tracks`, `fix_vias`).
-- **Stitching:** 132 GND stitching vias (0.6/0.3) on a 5 mm grid, placed only where both layers are solid pour (`stitch.py`).
-- **Final routing data:** `generator_scripts/routes_final.json`, with keys `tracks`, `vias`, `fix_tracks`, `fix_vias`, `stitch`, in board-relative mm.
-- **Silkscreen:** `place_refs.py` moves reference designators off pads and other silk (24 moved) and hides the mounting-hole refs. J4 has one label per pin.
+- **Stitching:** 132 GND stitching vias (0.6/0.3) on a 5 mm grid, placed only where both layers are solid pour (`stitch.py`). 128 remain after the park input (session 2).
+- **Routing data:** `generator_scripts/routes_final.json` is the frozen session-1 route; keys `tracks`, `vias`, `fix_tracks`, `fix_vias`, `stitch`, in board-relative mm. **`routes_park.json`** = that plus the park-input tracks/vias, minus 4 stitching vias. **It is what the board is built from.**
+- **Park input (session 2):** J5 at (61, 31.4) below the module, wire entry facing down. R17 at (68.5, 34.6) with its V12 pad overlapping the bus, like R13. R18/R19/C18 in a column at x 54, y 28–33. Routed by `route_extra.py` into `routes_park.json`: 11 tracks and 2 vias. PARK_ADC dives under the B.Cu PWM track and reaches IO7 on the top layer just inside the module's pad row. 4 stitching vias were removed: (52.5, 27.5), (52.5, 32.5), (62.5, 32.5), (67.5, 32.5).
+- **Silkscreen:** `place_refs.py` deletes footprint silk arcs that actually overlap a pad (L1, J5; lines that only come close are kept, because on diodes they are the cathode mark). It then moves reference designators off pads and other silk and hides the mounting-hole refs. J4 has one label per pin.
 
 ---
 
@@ -217,6 +229,7 @@ Scripts are in `generator_scripts/` (run them from the project root or that fold
 | `route.py` | Runs `java -jar freerouting-2.1.0.jar -de out/motor_ctrl.dsn -do out/motor_ctrl.ses -mp N`, then writes `out/routes.json`. Takes about 3–9 min. |
 | `fixgnd.py in.json out.json` | Finds isolated GND pads and adds a pad → via link to the bottom pour. |
 | `stitch.py in.json out.json` | Adds GND stitching vias. |
+| `route_extra.py board routes_in.json routes_out.json` | (pcbnew) Two-layer grid A* (0.1 mm grid, net-class clearance + 0.06 mm) for small additions after the main route is frozen. Connections are listed in `CONNECTIONS`. Writes them as locked `fix_tracks`/`fix_vias` and drops stitching vias in the way. Used for the park input. |
 | `build_pcb.py out.kicad_pcb routes.json` | Builds the `.kicad_pcb`: footprints with nets, MPN property and symbol path, outline, silk text, tracks, vias, GND zones, antenna keepout. Board file version 20221018 (KiCad 7). |
 | `place_refs.py in.kicad_pcb out.kicad_pcb` | (pcbnew) Moves silk reference designators to clean spots. |
 | `kicad_finish.py in.kicad_pcb out.kicad_pcb drc.rpt` | (pcbnew) Sets the drill/place origin, fills zones, saves, writes the KiCad DRC report and prints a summary. |
@@ -246,18 +259,21 @@ python3 check.py out/routes_final.json                 # expect shorts [] and un
 ```bash
 export KICAD_FP_DIR=/home/user/vendor/fp ESP_FP_DIR=/home/user/vendor/esp
 G=generator_scripts; K=kicad_check; mkdir -p $K
-python3 $G/build_pcb.py $K/built.kicad_pcb $G/routes_final.json
+python3 $G/build_pcb.py $K/unrouted.kicad_pcb $G/routes_final.json                 # new parts, not yet routed
+(cd $G && python3 route_extra.py ../$K/unrouted.kicad_pcb routes_final.json routes_park.json)
+python3 $G/build_pcb.py $K/built.kicad_pcb $G/routes_park.json
 python3 $G/place_refs.py $K/built.kicad_pcb $K/placed.kicad_pcb
-python3 $G/kicad_finish.py $K/placed.kicad_pcb motor_ctrl.kicad_pcb $K/drc.rpt   # expect only 4 L1 silk items, 0 unconnected
+python3 $G/kicad_finish.py $K/placed.kicad_pcb motor_ctrl.kicad_pcb $K/drc.rpt   # expect "clean", 0 unconnected
 sh $G/make_fab.sh
 python3 $G/gen_sch.py motor_ctrl.kicad_sch && (cd $G && python3 verify_sch.py)
 sh $G/run_erc_gui.sh $PWD/motor_ctrl.kicad_sch && mv ERC.rpt $K/                    # expect 0 errors 0 warnings
 kicad-cli sch export netlist -o $K/motor_ctrl.net motor_ctrl.kicad_sch
 python3 $G/compare_sch_pcb.py $K/motor_ctrl.net motor_ctrl.kicad_pcb                # expect MATCH
-sh firmware/test/run_tests.sh                                                       # expect ALL PASSED twice
+(cd $G && python3 make_bom.py ../motor_ctrl_BOM.csv)
+sh firmware/test/run_tests.sh                                                       # expect ALL PASSED four times
 ```
 
-`kicad_check/` is git-ignored scratch. `make_bom.py` and the old render scripts were not re-run (the BOM did not change).
+`kicad_check/` is git-ignored scratch. The old render scripts were not re-run.
 
 Re-running `route.py` gives a different route. If you re-route, redo the FB nudge and every later step. Also note that `fixgnd.py` and `stitch.py` run after routing, so moving parts invalidates them.
 
@@ -283,7 +299,13 @@ Re-running `route.py` gives a different route. If you re-route, redo the FB nudg
 - **Serial at 115200:** `s <0-100>` sets speed and stops the program, `r <ms>` sets the ramp time, `go`, `stop`, `v` prints the voltage.
 - **Optional pot:** set `USE_POT = true` to control speed from a pot on IO5 (J4). The pot sets the target and the output ramps to it over 300 ms; the bottom 2% of travel means off.
 - **Status LED:** blinks slowly while running, fast on a fault.
-- **Tests:** `firmware/test/run_tests.sh` compiles the sketch with host g++ (`-Wall -Wextra -Werror`) against `firmware/test/mock/Arduino.h`. That mock follows the arduino-esp32 3.3.x signatures for ledc, ADC, `min` and `constrain`. The tests run it in simulated time, once as shipped and once with `USE_POT = true`.
+- **Parking (`USE_PARK`, default on):** a program pause, `stop`, `s 0`, the pot at zero, or power-up in pot mode starts a park.
+  - The motor ramps to `PARK_PCT` (70%) and runs until IO7 reads "parked" 3 samples in a row, then cuts. A pause's hold time counts from that moment.
+  - "Parked" means park voltage (×11) < 0.5 × last battery reading, XOR `PARK_INVERT`. With 31b-style switches the parked level depends on duty, (1 − D) × Vbat, which is why the run to park is at 70%. The detection is only accepted once at speed.
+  - `PARK_TIMEOUT_MS` (6 s): stop anyway and print `PARK: park position not seen`.
+  - A battery fault mid-park sets `parkPending`, so the park resumes after recovery. `parkedKnown` stops a repeated stop from making an extra wipe.
+  - `v` prints the park-input voltage and state.
+- **Tests:** `firmware/test/run_tests.sh` compiles the sketch with host g++ (`-Wall -Wextra -Werror`) against `firmware/test/mock/Arduino.h`. That mock follows the arduino-esp32 3.3.x signatures for ledc, ADC, `min` and `constrain`. The tests run it in simulated time, with a wiper model: 300°/s crank, 15° park window, four park-switch types, and the R18‖R19×C18 filter. There are four builds: as shipped (parking), `PARK_INVERT`, `USE_PARK = false` and `USE_POT = true`.
 - **Not yet compiled with the real ESP32-S3 toolchain:** the PlatformIO registry and dl.espressif.com were blocked in the session 2 environment.
 
 ---
@@ -292,14 +314,14 @@ Re-running `route.py` gives a different route. If you re-route, redo the FB nudg
 
 | Check | Result |
 |---|---|
-| **KiCad 7.0.11 DRC** after zone fill (`kicad_finish.py`) | 0 unconnected pads; no clearance, courtyard, edge, thermal or dangling-track errors. Remaining: 3 `silk_over_copper` + 1 `silk_overlap` from L1's own library silk arcs (cosmetic; fabs clip silk at pads). `lib_footprint_issues` only means no fp-lib-table on the build machine. The 2 raster-clearance flags from session 1 do not show in real DRC. |
+| **KiCad 7.0.11 DRC** after zone fill (`kicad_finish.py`) | **Clean**: 0 violations, 0 unconnected pads, with the park input. `lib_footprint_issues` only means no fp-lib-table on the build machine. The 2 raster-clearance flags from session 1 do not show in real DRC. |
 | Antenna keepout | Probed the filled zones: 0 copper inside x 57.2–77, y 0.4–7.2 on both layers |
 | **KiCad ERC** (eeschema 7.0.11) | 0 errors, 0 warnings (before PWR_FLAGs: 4 "power input not driven") |
-| KiCad netlist vs board (`compare_sch_pcb.py`) | MATCH: 59/59 components (value + footprint), 30/30 nets, 59/59 symbol↔footprint links. Checked that it catches a swapped pin and a wrong value. |
+| KiCad netlist vs board (`compare_sch_pcb.py`) | MATCH: 64/64 components (value + footprint), 32/32 nets, all symbol↔footprint links. Checked that it catches a swapped pin and a wrong value. |
 | Schematic geometry vs `design.py` (`verify_sch.py`) | 0 mismatches, 0 merged nets, 0 T-junctions, 4 PWR_FLAGs on the right nets |
 | Rebuild reproducibility | Rebuilding the delivered board with the pinned libraries matched it item for item apart from UUIDs. Session 2's board differs from the delivered one only by the intended changes (one V12 track, J3/U1 overrides, keepout, silk, paths). |
 | Gerbers | Plotted by kicad-cli and rendered independently with gerbv (`fab/gerber_*.png`); vias, pours, keepout and silk checked visually |
-| Firmware (host) | Compiles warning-free against the mock API; all simulation tests pass, shipped and pot builds |
+| Firmware (host) | Compiles warning-free against the mock API; all simulation tests pass in the four builds, including parking with contact-to-GND, 31b and inverted switches, the unwired timeout and a fault mid-park |
 | Electrical review (session 1) | Pinouts checked for ESP32-S3-WROOM-1, LMR33630 (SO PowerPAD), UCC27517A (SOT-23-5), USBLC6-2SC6, the TO-252/D2PAK tabs, and the P-FET orientation (drain on the battery side) |
 
 ---
@@ -310,11 +332,8 @@ Done in session 2: KiCad load, zone fill, DRC, ERC, symbol↔footprint linking, 
 
 1. **Compile the firmware with the real toolchain** (Arduino IDE or arduino-cli, esp32 core 3.x, "ESP32S3 Dev Module"), then bench-test it.
 2. **Open the project once in KiCad 8 or 9**, the user's likely version. Everything was checked in 7.0.11 only. Expect a format-upgrade prompt. 3D models use `${KICAD8_3DMODEL_DIR}`; the ESP32's uses `${KICAD8_3RD_PARTY}`, so it only shows if the Espressif library is installed through KiCad's Plugin and Content Manager. Rerun DRC and ERC there. Run Update PCB from Schematic: it should report no changes, since footprint paths = symbol UUIDs.
-3. **Optional cosmetic:** L1's library silk arcs overlap its pads (4 DRC silk items). This could be fixed by editing the footprint copy on the board.
-4. **Wiper-motor questions put to the user (session 2), answers pending:**
-   - **Ground isolation.** The board switches the motor's *negative*. If the wiper motor's ground terminal is bonded to its case and the case is bolted to the car body, the motor runs uncontrolled. That case needs a high-side switch, i.e. a motor-stage redesign. On an isolated mount the current design works.
-   - **Park switch.** Pauses currently stop the blades wherever they are. Parking needs a 12 V-tolerant input (divider + clamp, or opto) for the park contact, plus firmware that stops at the park position. That is a PCB change; J4's IO5/IO6 are 3.3 V only.
-   - With stall a realistic event (ice), current sensing (below) becomes more useful: the firmware could stop the motor before the fuse blows.
+3. **Bench-test parking with the user's actual wiper motor.** Identify its park terminals, check `v` readings at and away from park, and tune `PARK_PCT` if needed. Coasting is not modelled in the tests: a motor that overruns the park window after the cut would need a lower `PARK_PCT`, or braking.
+4. Wiper stall (jammed arm) is the main overload case. Current sensing (below) would let the firmware stop before the fuse blows.
 5. **Optional improvements discussed but not implemented:**
    - Swap the custom embedded symbols for standard KiCad symbols, keeping pin numbers.
    - Current sensing (shunt + amplifier into an ADC).
@@ -353,3 +372,4 @@ The project is a local git repo; each step below is one commit. Nothing was push
 4. Gerbers, drills and pick-and-place via `make_fab.sh`, with origin at the board's bottom-left.
 5. The schematic was KiCad 8 format, so KiCad 7 couldn't read it. Switched `gen_sch.py` to the KiCad 7 format. The real ERC gave 4 power-not-driven errors; added PWR_FLAGs (GND, VIN_BUCK, +3V3, VDRV). Wrote a project symbol library, deterministic UUIDs, and footprint paths for linking. Readability fixes: vertical ref/value on two-pin parts, joined stacked pairs, chained GND pins, R16/D8 moved. The PDF is now plotted by KiCad.
 6. Firmware: host mock and tests found a fault-recovery jump to full duty. Fixed it, and pot mode now ramps.
+7. The user confirmed the motor is a windscreen wiper motor, mounted in a separate device (not a car), and asked for the blades to park. Added the J5 park input (R17/R18/R19/C18 → IO7), routed it with the new `route_extra.py` and made DRC fully clean (silk arcs over pads removed). Added firmware parking with tests for four switch types.
