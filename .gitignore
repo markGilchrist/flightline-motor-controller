@@ -3,3 +3,4 @@ __pycache__/
 *-backups/
 fp-info-cache
 kicad_check/
+~*.lck

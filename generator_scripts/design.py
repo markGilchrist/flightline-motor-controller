@@ -12,6 +12,13 @@ C0805 = 'Capacitor_SMD:C_0805_2012Metric'
 C1206 = 'Capacitor_SMD:C_1206_3216Metric'
 C1210 = 'Capacitor_SMD:C_1210_3225Metric'
 
+import uuid as _uuid
+_NS = _uuid.UUID('6f3c2a1e-6b1d-4f6e-9a57-3c0d2b7e9a10')
+def sym_uuid(ref):
+    """Schematic symbol UUID for a part; build_pcb.py writes the same value as the footprint's path,
+    which is how KiCad links a footprint to its symbol (Update PCB from Schematic)."""
+    return str(_uuid.uuid5(_NS, 'symbol:' + ref))
+
 def P(ref, value, fp, x, y, rot, pins, kind, mpn='', note=''):
     return dict(ref=ref, value=value, fp=fp, x=x, y=y, rot=rot, pins=pins, kind=kind, mpn=mpn, note=note)
 

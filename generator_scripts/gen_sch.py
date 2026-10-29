@@ -1,11 +1,15 @@
-"""Generate a KiCad 8 schematic (.kicad_sch) and a matching PDF from design.py.
+"""Generate a KiCad schematic (.kicad_sch, KiCad 7 file format so KiCad 7, 8 and 9 all open it) and a PDF from design.py.
 Style: every symbol is drawn upright, each pin gets a short wire stub ending in a net label
 (GND uses a power symbol). Labels with the same name are connected, so the schematic's
 netlist is exactly design.py's netlist."""
 import uuid, math
-from design import PARTS
+from design import PARTS, sym_uuid
 
-U = lambda: str(uuid.uuid4())
+# deterministic UUIDs: regenerating the schematic gives the same file unless the design changes
+_uuid_n = [0]
+def U():
+    _uuid_n[0] += 1
+    return str(uuid.uuid5(uuid.UUID('9d0f5c3e-2f7a-4c1b-8e4d-1a2b3c4d5e6f'), str(_uuid_n[0])))
 LIB = 'motor_ctrl'
 G = 2.54
 
@@ -153,6 +157,13 @@ defsym('esp32', g, pn, 'U', show_pin_names=True)
 defsym('hole', [('circle', (0, 0), 1.6)], [], 'H')
 defsym('GND', [('poly', [(0, 0), (0, -1.27), (1.27, -1.27), (0, -2.54), (-1.27, -1.27), (0, -1.27)], False)],
        [('1', 'GND', 0, 0, 270, 0, 'power_in')], '#PWR', power=True)
+# ERC marker: tells KiCad a net is powered when its source is a passive part (diode, resistor, inductor, connector)
+defsym('PWR_FLAG', [('poly', [(0, 0), (0, 1.27), (-1.016, 1.905), (0, 2.54), (1.016, 1.905), (0, 1.27)], False)],
+       [('1', 'pwr', 0, 0, 90, 0, 'power_out')], '#FLG', power=True)
+
+# nets whose only sources are passive pins; each gets a PWR_FLAG above the block frames
+PWR_FLAGS = [('GND', 25.4), ('VIN_BUCK', 40.64), ('+3V3', 55.88), ('VDRV', 71.12)]
+PWR_FLAG_Y = 19.05
 
 # ---------------------------------------------------------------- placement on an A3 sheet (mm, y down)
 PLACE = {
@@ -167,12 +178,12 @@ PLACE = {
     'D5': (25.4, 127.0), 'D6': (38.1, 127.0), 'C7': (50.8, 127.0), 'C8': (63.5, 127.0), 'C9': (76.2, 127.0),
     'R6': (88.9, 127.0), 'U1': (119.38, 132.08), 'C11': (101.6, 157.48), 'C10': (149.86, 121.92), 'L1': (162.56, 121.92),
     'R7': (177.8, 127.0), 'R8': (177.8, 147.32), 'C12': (190.5, 127.0), 'C13': (203.2, 127.0),
-    'R16': (205.74, 147.32), 'D8': (205.74, 160.02),
     # ESP32
     'U3': (299.72, 160.02), 'C14': (233.68, 137.16), 'C15': (246.38, 137.16), 'R9': (233.68, 172.72),
     'C16': (246.38, 172.72), 'SW1': (259.08, 172.72), 'R10': (233.68, 203.2), 'SW2': (246.38, 203.2),
     'R13': (365.76, 132.08), 'R14': (365.76, 154.94), 'C17': (378.46, 154.94),
     'R15': (391.16, 132.08), 'D7': (391.16, 154.94), 'J4': (365.76, 180.34),
+    'R16': (391.16, 187.96), 'D8': (391.16, 210.82),     # 3V3 power LED
     # USB
     'J3': (40.64, 210.82), 'R11': (91.44, 236.22), 'R12': (104.14, 236.22), 'U4': (134.62, 205.74),
     # holes
@@ -182,7 +193,7 @@ BLOCKS = [  # title, x0, y0, x1, y1
     ('POWER INPUT, FUSE, LOAD-DUMP TVS, REVERSE-POLARITY PROTECTION', 12.7, 27.94, 165.1, 76.2),
     ('MOTOR SWITCH: GATE DRIVER + LOW-SIDE N-MOSFET + FREEWHEEL DIODE', 172.72, 27.94, 320.04, 104.14),
     ('3.3 V BUCK (12 V or USB)', 12.7, 106.68, 218.44, 172.72),
-    ('ESP32-S3 MODULE, RESET/BOOT, BATTERY SENSE, LEDS, AUX', 223.52, 116.84, 414.02, 228.6),
+    ('ESP32-S3 MODULE, RESET/BOOT, BATTERY SENSE, LEDS, AUX', 223.52, 116.84, 406.4, 228.6),
     ('USB-C (PROGRAMMING / DEBUG)', 12.7, 182.88, 162.56, 254.0),
 ]
 NOTES = [
@@ -200,7 +211,7 @@ def fmt(v): return f'{v:.4f}'.rstrip('0').rstrip('.') if abs(v) > 1e-9 else '0'
 
 def eff(size=1.27, hide=False, justify=None):
     j = f' (justify {justify})' if justify else ''
-    return f'(effects (font (size {size} {size})){j}{" (hide yes)" if hide else ""})'
+    return f'(effects (font (size {size} {size})){j}{" hide" if hide else ""})'
 
 def lib_symbol_sexpr(kind):
     s = SYMS[kind]
@@ -210,12 +221,11 @@ def lib_symbol_sexpr(kind):
     if s['power']: out.append('(power)')
     if not s['pnum']: out.append('(pin_numbers hide)')
     out.append('(pin_names (offset 0.254)' + ('' if s['pn'] else ' hide') + ')')
-    out.append('(exclude_from_sim no) (in_bom yes) (on_board yes)')
-    out.append(f'(property "Reference" "{s["ref"]}" (at 0 0 0) {eff()})')
-    out.append(f'(property "Value" "{kind}" (at 0 0 0) {eff()})')
-    out.append(f'(property "Footprint" "" (at 0 0 0) {eff(hide=True)})')
-    out.append(f'(property "Datasheet" "" (at 0 0 0) {eff(hide=True)})')
-    out.append(f'(property "Description" "" (at 0 0 0) {eff(hide=True)})')
+    out.append('(in_bom yes) (on_board yes)')
+    out.append(f'(property "Reference" "{s["ref"]}" (id 0) (at 0 0 0) {eff()})')
+    out.append(f'(property "Value" "{kind}" (id 1) (at 0 0 0) {eff()})')
+    out.append(f'(property "Footprint" "" (id 2) (at 0 0 0) {eff(hide=True)})')
+    out.append(f'(property "Datasheet" "" (id 3) (at 0 0 0) {eff(hide=True)})')
     out.append(f'(symbol "{short}_0_1"')
     for g in s['g']:
         out.append(graphic_sexpr(g))
@@ -264,6 +274,7 @@ def part_rot(p):
     return 0
 
 def build():
+    _uuid_n[0] = 0
     root = U()
     items = []        # sexpr strings
     draw = dict(symbols=[], wires=[], labels=[], gnds=[], nc=[], texts=[], blocks=BLOCKS)
@@ -274,15 +285,16 @@ def build():
         pwr_n[0] += 1
         ref = f'#PWR{pwr_n[0]:02d}'
         items.append(f'''(symbol (lib_id "{sym_name('GND')}") (at {fmt(x)} {fmt(y)} 0) (unit 1)
-  (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no) (uuid "{U()}")
-  (property "Reference" "{ref}" (at {fmt(x)} {fmt(y + 6.35)} 0) {eff(hide=True)})
-  (property "Value" "GND" (at {fmt(x)} {fmt(y + 4.2)} 0) {eff()})
-  (property "Footprint" "" (at {fmt(x)} {fmt(y)} 0) {eff(hide=True)})
-  (property "Datasheet" "" (at {fmt(x)} {fmt(y)} 0) {eff(hide=True)})
+  (in_bom yes) (on_board yes) (dnp no) (uuid "{U()}")
+  (property "Reference" "{ref}" (id 0) (at {fmt(x)} {fmt(y + 6.35)} 0) {eff(hide=True)})
+  (property "Value" "GND" (id 1) (at {fmt(x)} {fmt(y + 4.2)} 0) {eff()})
+  (property "Footprint" "" (id 2) (at {fmt(x)} {fmt(y)} 0) {eff(hide=True)})
+  (property "Datasheet" "" (id 3) (at {fmt(x)} {fmt(y)} 0) {eff(hide=True)})
   (pin "1" (uuid "{U()}"))
   (instances (project "motor_ctrl" (path "/{root}" (reference "{ref}") (unit 1)))))''')
         draw['gnds'].append((x, y))
 
+    pending = []      # net labels, emitted after all parts are placed
     for p in PARTS:
         kind = p['kind']
         used_kinds.add(kind)
@@ -303,19 +315,25 @@ def build():
         if kind in ('nmos', 'pmos'):
             rx, ry, vx, vy = X + 5.5, Y - 0.8, X + 5.5, Y + 1.2
         if kind == 'dual_schottky':
-            rx, ry, vx, vy = X + 3.5, Y + 3.0, X + 3.5, Y + 5.0
+            rx, ry, vx, vy, just = X - 2.54, Y + 5.5, X - 2.54, Y + 7.5, 'left'
         if kind in ('conn2', 'conn4'):
             rx, ry, vx, vy, just = X - 1.27, Y - 3.0, X - 1.27, Y + (6.0 if kind == 'conn2' else 11.0), None
         if kind in ('esp32', 'buck', 'driver', 'esd', 'usbc'):
             vx, vy = X, Y + (len(s['pins']) and (min(pp[3] for pp in s['pins']) * -1 + 4.2))
-        props = [('Reference', p['ref'], rx, ry, False), ('Value', p['value'], vx, vy, False),
-                 ('Footprint', p['fp'], X, Y, True), ('Datasheet', '', X, Y, True),
-                 ('MPN', p.get('mpn', ''), X, Y, True), ('Note', p.get('note', ''), X, Y, True)]
-        ptxt = '\n'.join(f'  (property "{k}" "{v}" (at {fmt(x)} {fmt(y)} 0) {eff(hide=h, justify=just if k in ("Reference", "Value") else None)})'
-                         for k, v, x, y, h in props)
+        fang = 0
+        if kind in ('r', 'c', 'cp', 'l', 'tvs', 'fuse', 'zener', 'schottky', 'led', 'sw'):
+            # rows of vertical two-pin parts are 12.7 mm apart: write ref and value vertically beside the
+            # body, otherwise values like "470uF 35V" run into the next column
+            off = 4.3 if kind == 'sw' else 3.0
+            rx, ry, vx, vy, just, fang = X + off, Y, X + off + 1.9, Y, None, 90
+        props = [('Reference', p['ref'], rx, ry, False, fang), ('Value', p['value'], vx, vy, False, fang),
+                 ('Footprint', p['fp'], X, Y, True, 0), ('Datasheet', '', X, Y, True, 0),
+                 ('MPN', p.get('mpn', ''), X, Y, True, 0), ('Note', p.get('note', ''), X, Y, True, 0)]
+        ptxt = '\n'.join(f'  (property "{k}" "{v}" (id {i}) (at {fmt(x)} {fmt(y)} {a}) {eff(hide=h, justify=just if k in ("Reference", "Value") else None)})'
+                         for i, (k, v, x, y, h, a) in enumerate(props))
         pins_txt = '\n'.join(f'  (pin "{pp[0]}" (uuid "{U()}"))' for pp in s['pins'])
         items.append(f'''(symbol (lib_id "{sym_name(kind)}") (at {fmt(X)} {fmt(Y)} {rot}) (unit 1)
-  (exclude_from_sim no) (in_bom {"no" if kind == "hole" else "yes"}) (on_board yes) (dnp no) (uuid "{U()}")
+  (in_bom {"no" if kind == "hole" else "yes"}) (on_board yes) (dnp no) (uuid "{sym_uuid(p['ref'])}")
 {ptxt}
 {pins_txt}
   (instances (project "motor_ctrl" (path "/{root}" (reference "{p['ref']}") (unit 1)))))''')
@@ -333,11 +351,20 @@ def build():
                 draw['nc'].append((px, py))
                 continue
             L = 2.54
+            chained = False
             if net == 'GND' and dx != 0:
-                # if the pin just below on this side belongs to another net, step further out so the
-                # drop to the GND symbol cannot land on that pin's stub end
-                below = [q for q in s['pins'] if q[4] == pin[4] and abs(q[2] - pin[2]) < 1e-6 and abs(q[3] - (pin[3] - G)) < 1e-6]
-                if below and p['pins'].get(below[0][0]) not in ('GND', None):
+                def below(q):
+                    b = [r for r in s['pins'] if r[4] == q[4] and abs(r[2] - q[2]) < 1e-6 and abs(r[3] - (q[3] - G)) < 1e-6]
+                    return b[0] if b else None
+                # a run of adjacent GND pins shares one GND symbol under its lowest pin; the others drop onto
+                # the stub end of the pin below
+                chained = below(pin) is not None and p['pins'].get(below(pin)[0]) == 'GND'
+                last = pin
+                while below(last) is not None and p['pins'].get(below(last)[0]) == 'GND':
+                    last = below(last)
+                # if the pin under the run belongs to another net, step further out so the drop to the
+                # GND symbol cannot land on that pin's stub end
+                if below(last) is not None and p['pins'].get(below(last)[0]) is not None:
                     L = 5.08
             ex, ey = px + dx * L, py + dy * L
             if net == 'GND':
@@ -348,7 +375,10 @@ def build():
                     if dx != 0:
                         items.append(wire(px, py, ex, ey)); draw['wires'].append((px, py, ex, ey))
                         items.append(wire(ex, ey, ex, ey + G)); draw['wires'].append((ex, ey, ex, ey + G))
-                        place_gnd(ex, ey + G)
+                        if chained:
+                            items.append(f'(junction (at {fmt(ex)} {fmt(ey + G)}) (diameter 0) (color 0 0 0 0) (uuid "{U()}"))')
+                        else:
+                            place_gnd(ex, ey + G)
                     else:
                         items.append(wire(px, py, ex, ey)); draw['wires'].append((px, py, ex, ey))
                         place_gnd(ex, ey)
@@ -358,24 +388,64 @@ def build():
             elif dx == 1: ang, j = 0, 'left bottom'
             elif dy == -1: ang, j = 90, 'left bottom'
             else: ang, j = 270, 'right bottom'
-            items.append(f'(label "{net}" (at {fmt(ex)} {fmt(ey)} {ang}) (fields_autoplaced yes) '
-                         f'(effects (font (size 1.27 1.27)) (justify {j})) (uuid "{U()}"))')
-            draw['labels'].append((net, ex, ey, ang))
+            pending.append((net, ex, ey, ang, j))
+
+    # Stacked parts joined by one net (R7/R8, R13/R14, ...) would get two labels on top of each other:
+    # join them with a wire and keep only the lower label.
+    def emit_label(net, x, y, ang, j):
+        items.append(f'(label "{net}" (at {fmt(x)} {fmt(y)} {ang}) (fields_autoplaced) '
+                     f'(effects (font (size 1.27 1.27)) (justify {j})) (uuid "{U()}"))')
+        draw['labels'].append((net, x, y, ang))
+    skip = set()
+    for i, (n1, x1, y1, a1, _) in enumerate(pending):
+        for k, (n2, x2, y2, a2, _) in enumerate(pending):
+            if n1 == n2 and a1 == 270 and a2 == 90 and abs(x1 - x2) < 1e-6 and 0 < y2 - y1 <= 12.7:
+                items.append(wire(x1, y1, x2, y2)); draw['wires'].append((x1, y1, x2, y2))
+                skip.add(i)
+    for i, lab in enumerate(pending):
+        if i not in skip:
+            emit_label(*lab)
+
+    # power flags: flag symbol, short wire down, then a GND symbol or a net label
+    nflg = 0
+    for net, fx in PWR_FLAGS:
+        nflg += 1
+        ref = f'#FLG{nflg:02d}'
+        used_kinds.add('PWR_FLAG')
+        items.append(f'''(symbol (lib_id "{sym_name('PWR_FLAG')}") (at {fmt(fx)} {fmt(PWR_FLAG_Y)} 0) (unit 1)
+  (in_bom yes) (on_board yes) (dnp no) (uuid "{U()}")
+  (property "Reference" "{ref}" (id 0) (at {fmt(fx)} {fmt(PWR_FLAG_Y - 1.9)} 0) {eff(hide=True)})
+  (property "Value" "PWR_FLAG" (id 1) (at {fmt(fx)} {fmt(PWR_FLAG_Y - 3.6)} 0) {eff()})
+  (property "Footprint" "" (id 2) (at {fmt(fx)} {fmt(PWR_FLAG_Y)} 0) {eff(hide=True)})
+  (property "Datasheet" "" (id 3) (at {fmt(fx)} {fmt(PWR_FLAG_Y)} 0) {eff(hide=True)})
+  (pin "1" (uuid "{U()}"))
+  (instances (project "motor_ctrl" (path "/{root}" (reference "{ref}") (unit 1)))))''')
+        ey = PWR_FLAG_Y + G
+        items.append(wire(fx, PWR_FLAG_Y, fx, ey)); draw['wires'].append((fx, PWR_FLAG_Y, fx, ey))
+        draw.setdefault('flags', []).append((net, fx, PWR_FLAG_Y))
+        if net == 'GND':
+            place_gnd(fx, ey)
+        else:
+            items.append(f'(label "{net}" (at {fmt(fx)} {fmt(ey)} 0) (fields_autoplaced) '
+                         f'(effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "{U()}"))')
+            draw['labels'].append((net, fx, ey, 0))
+    items.append(f'(text "PWR_FLAG: these nets are fed through passive parts (diodes, R4, L1, J1), so ERC needs a flag" '
+                 f'(at {fmt(86.36)} {fmt(PWR_FLAG_Y + 2.54)} 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "{U()}"))')
 
     # block frames + titles + notes
     for title, x0, y0, x1, y1 in BLOCKS:
         items.append(f'(rectangle (start {fmt(x0)} {fmt(y0)}) (end {fmt(x1)} {fmt(y1)}) '
                      f'(stroke (width 0.2) (type dash)) (fill (type none)) (uuid "{U()}"))')
-        items.append(f'(text "{title}" (exclude_from_sim no) (at {fmt(x0 + 1.5)} {fmt(y0 + 2.5)} 0) '
+        items.append(f'(text "{title}" (at {fmt(x0 + 1.5)} {fmt(y0 + 2.5)} 0) '
                      f'(effects (font (size 1.8 1.8) (thickness 0.36) bold) (justify left bottom)) (uuid "{U()}"))')
     ny = 238.76
     for i, n in enumerate(NOTES):
-        items.append(f'(text "{n}" (exclude_from_sim no) (at 172.72 {fmt(ny + i * 3.2)} 0) '
+        items.append(f'(text "{n}" (at 172.72 {fmt(ny + i * 3.2)} 0) '
                      f'(effects (font (size 1.5 1.5)) (justify left bottom)) (uuid "{U()}"))')
         draw['texts'].append((n, 172.72, ny + i * 3.2))
 
     libs = '\n'.join(lib_symbol_sexpr(k) for k in sorted(used_kinds))
-    sch = f'''(kicad_sch (version 20231120) (generator "eeschema") (generator_version "8.0")
+    sch = f'''(kicad_sch (version 20230121) (generator eeschema)
 (uuid "{root}")
 (paper "A3")
 (title_block (title "ESP32-S3 12 V Motor PWM Controller") (date "2026-10-26") (rev "1.0")
@@ -467,10 +537,30 @@ def render_pdf(draw, path):
     fig.savefig(path)
     plt.close(fig)
 
+def lib_file_sexpr():
+    """The same symbols as a standalone library, so 'motor_ctrl:' resolves and they can be edited in KiCad."""
+    syms = []
+    for kind in sorted(SYMS):
+        sx = lib_symbol_sexpr(kind)
+        syms.append(sx.replace(f'(symbol "{sym_name(kind)}"', f'(symbol "{kind}"', 1))
+    return '(kicad_symbol_lib (version 20220914) (generator kicad_symbol_editor)\n' + '\n'.join(syms) + '\n)\n'
+
+SYM_LIB_TABLE = '''(sym_lib_table
+  (lib (name "motor_ctrl")(type "KiCad")(uri "${KIPRJMOD}/motor_ctrl.kicad_sym")(options "")(descr "Symbols generated by gen_sch.py"))
+)
+'''
+
 if __name__ == '__main__':
-    import sys
+    import sys, os, shutil, subprocess
     sch, draw = build()
     out = sys.argv[1] if len(sys.argv) > 1 else 'out/motor_ctrl.kicad_sch'
+    d = os.path.dirname(os.path.abspath(out))
     open(out, 'w').write(sch)
-    render_pdf(draw, out.replace('.kicad_sch', '_schematic.pdf'))
-    print('wrote', out)
+    open(os.path.join(d, 'motor_ctrl.kicad_sym'), 'w').write(lib_file_sexpr())
+    open(os.path.join(d, 'sym-lib-table'), 'w').write(SYM_LIB_TABLE)
+    pdf = out.replace('.kicad_sch', '_schematic.pdf')
+    if shutil.which('kicad-cli'):     # KiCad's own plot
+        subprocess.run(['kicad-cli', 'sch', 'export', 'pdf', '-o', pdf, out], check=True, capture_output=True)
+    else:                             # approximate matplotlib drawing of the same geometry
+        render_pdf(draw, pdf)
+    print('wrote', out, 'motor_ctrl.kicad_sym, sym-lib-table and', os.path.basename(pdf))

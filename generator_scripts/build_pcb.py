@@ -5,7 +5,7 @@ from kiutils.items.brditems import Segment, Via
 from kiutils.items.gritems import GrLine, GrText
 from kiutils.items.zones import Zone, ZonePolygon, FillSettings, Hatch, KeepoutSettings
 from kiutils.items.common import Coordinate
-from design import PARTS, W, H, OX, OY, NETCLASS
+from design import PARTS, W, H, OX, OY, NETCLASS, sym_uuid
 from geom import fp_of
 import power_routes
 
@@ -34,6 +34,7 @@ def make_board(routes=None):
     for p in PARTS:
         fp = fp_of(p['fp'])
         fp.libId = p['fp']
+        fp.path = '/' + sym_uuid(p['ref'])    # links the footprint to its schematic symbol
         fp.tstamp = U()
         fp.position = Position(X=round(OX + p['x'], 4), Y=round(OY + p['y'], 4), angle=p['rot'] or None)
         for g in fp.graphicItems:

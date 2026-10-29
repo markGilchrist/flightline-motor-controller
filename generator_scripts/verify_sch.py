@@ -34,4 +34,6 @@ for p in PARTS:
     for num, net in p['pins'].items():
         if net: nets.setdefault(f(('net', net)), set()).add(net)
 merged = [v for v in nets.values() if len(v) > 1]
+flag_bad = [(net, x, y) for net, x, y in d.get('flags', []) if f(('pt',) + R(x, y)) != f(('net', net))]
 print('pins checked, mismatches:', bad, ' merged nets:', merged)
+print('PWR_FLAGs:', [n for n, _, _ in d.get('flags', [])], ' misplaced:', flag_bad)
