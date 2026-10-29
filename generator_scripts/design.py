@@ -77,7 +77,8 @@ PARTS = [
     P('C13', '22uF 10V', C1206, 35.5, 6.0, 90, {'1': '+3V3', '2': 'GND'}, 'c', 'X7R 1206', ''),
     # ---------------- ESP32-S3 ----------------
     P('U3', 'ESP32-S3-WROOM-1', 'Espressif:ESP32-S3-WROOM-1', 67.0, 17.0, 0,
-      {'1': 'GND', '2': '+3V3', '3': 'EN', '4': 'PWM', '5': 'IO5', '6': 'IO6', '13': 'USB_DM', '14': 'USB_DP',
+      {'1': 'GND', '2': '+3V3', '3': 'EN', '4': 'PWM', '5': 'IO5', '6': 'IO6', '7': 'PARK_ADC',
+       '13': 'USB_DM', '14': 'USB_DP',
        '27': 'IO0', '38': 'LED', '39': 'VSENSE', '40': 'GND', '41': 'GND'},
       'esp32', 'Espressif ESP32-S3-WROOM-1-N8', ''),
     P('C14', '10uF', C0805, 53.0, 9.0, 90, {'1': '+3V3', '2': 'GND'}, 'c', '', ''),
@@ -106,6 +107,16 @@ PARTS = [
     P('R16', '1k', R0805, 25.0, 30.0, 0, {'1': '+3V3', '2': 'PWR_A'}, 'r', '', ''),
     P('J4', 'AUX', 'Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical', 88.0, 17.5, 0,
       {'1': '+3V3', '2': 'IO5', '3': 'IO6', '4': 'GND'}, 'conn4', '2.54 mm header', 'Spare: pot / button / sensor'),
+    # ---------------- wiper park switch input ----------------
+    # J5.1 takes the motor's park contact. R17 pulls it to 12 V when the contact is open; R18/R19 scale it
+    # by 1/11 (32 V load dump -> 2.9 V) and C18 filters the 20 kHz PWM ripple for the ADC on IO7.
+    P('J5', 'PARK', 'TerminalBlock_Phoenix:TerminalBlock_Phoenix_PT-1,5-2-3.5-H_1x02_P3.50mm_Horizontal',
+      61.0, 31.4, 0, {'1': 'PARK', '2': 'GND'}, 'conn2', 'Phoenix 1984617 (PT 1,5/2-3,5-H)',
+      'Wiper park switch: 1 = park contact, 2 = GND'),
+    P('R17', '4k7', R1206, 68.5, 34.6, 90, {'1': 'V12', '2': 'PARK'}, 'r', '', 'Park input pull-up / contact wetting'),
+    P('R18', '100k', R0805, 54.0, 28.2, 180, {'1': 'PARK', '2': 'PARK_ADC'}, 'r', '1%', 'Park sense divider top'),
+    P('R19', '10k', R0805, 54.0, 30.6, 0, {'1': 'PARK_ADC', '2': 'GND'}, 'r', '1%', 'Park sense divider bottom'),
+    P('C18', '470nF', C0805, 54.0, 33.0, 0, {'1': 'PARK_ADC', '2': 'GND'}, 'c', '', 'PWM ripple filter'),
     # ---------------- mechanical ----------------
     P('H1', 'M3', 'MountingHole:MountingHole_3.2mm_M3', 4.0, 4.0, 0, {}, 'hole'),
     P('H2', 'M3', 'MountingHole:MountingHole_3.2mm_M3', 88.0, 4.0, 0, {}, 'hole'),

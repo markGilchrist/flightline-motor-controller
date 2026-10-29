@@ -184,6 +184,9 @@ PLACE = {
     'R13': (365.76, 132.08), 'R14': (365.76, 154.94), 'C17': (378.46, 154.94),
     'R15': (391.16, 132.08), 'D7': (391.16, 154.94), 'J4': (365.76, 180.34),
     'R16': (391.16, 187.96), 'D8': (391.16, 210.82),     # 3V3 power LED
+    # wiper park input
+    'J5': (177.8, 200.66), 'R17': (195.58, 195.58), 'R18': (205.74, 195.58), 'R19': (205.74, 220.98),
+    'C18': (215.9, 220.98),
     # USB
     'J3': (40.64, 210.82), 'R11': (91.44, 236.22), 'R12': (104.14, 236.22), 'U4': (134.62, 205.74),
     # holes
@@ -195,6 +198,7 @@ BLOCKS = [  # title, x0, y0, x1, y1
     ('3.3 V BUCK (12 V or USB)', 12.7, 106.68, 218.44, 172.72),
     ('ESP32-S3 MODULE, RESET/BOOT, BATTERY SENSE, LEDS, AUX', 223.52, 116.84, 406.4, 228.6),
     ('USB-C (PROGRAMMING / DEBUG)', 12.7, 182.88, 162.56, 254.0),
+    ('WIPER PARK SWITCH INPUT', 167.64, 177.8, 222.25, 234.95),
 ]
 NOTES = [
     'Motor: J2 pin 2 = +12 V (always on), pin 1 = MOTOR- (switched to GND by Q2).',
@@ -203,6 +207,7 @@ NOTES = [
     'Q1 + D2: reverse-battery protection (P-MOSFET, gate clamped to 12 V).',
     'D1 SMCJ20CA clamps load-dump spikes; everything on the 12 V side is rated >= 35 V.',
     'Rated for motors up to 10 A continuous (15 A fuse). Use 2 oz copper.',
+    'J5 park input: IO7 reads PARK / 11. Firmware compares it with the battery voltage (works for contact-to-GND and 31b park switches).',
 ]
 
 def sym_name(kind): return f'{LIB}:{kind}'

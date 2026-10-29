@@ -4,6 +4,8 @@ Usage: python3 place_refs.py in.kicad_pcb out.kicad_pcb
 Needs KiCad's pcbnew Python module (KiCad 7+). Run after build_pcb.py, before zone fill / DRC.
 Each reference keeps its library position if that is already clean; otherwise candidates around
 the footprint (sides and corners, 0/90 deg, 1.0 then 0.8 mm text) are tried nearest-first.
+First, footprint silk outlines (lines/arcs, not text) that actually overlap a pad are deleted (the fab would clip
+them anyway). Lines that only come close are kept: on diodes those carry the cathode marking.
 """
 import sys, math
 import pcbnew
@@ -21,6 +23,18 @@ def text_shape(t):
 
 def main(src, dst):
     b = pcbnew.LoadBoard(src)
+    pads = {pcbnew.F_SilkS: [], pcbnew.B_SilkS: []}
+    for fp in b.GetFootprints():
+        for pad in fp.Pads():
+            for silk, cu in ((pcbnew.F_SilkS, pcbnew.F_Cu), (pcbnew.B_SilkS, pcbnew.B_Cu)):
+                if pad.IsOnLayer(cu):
+                    pads[silk].append(pad.GetEffectiveShape(cu))
+    dropped = []
+    for fp in b.GetFootprints():
+        for g in list(fp.GraphicalItems()):
+            if g.GetLayer() in pads and g.Type() != pcbnew.PCB_FP_TEXT_T and \
+                    any(sp.Collide(g.GetEffectiveShape(), 0) for sp in pads[g.GetLayer()]):
+                fp.Remove(g); dropped.append(fp.GetReference())
     edge = b.GetBoardEdgesBoundingBox()
     inner = pcbnew.BOX2I(pcbnew.VECTOR2I(edge.GetX() + EDGE_GAP, edge.GetY() + EDGE_GAP),
                          pcbnew.VECTOR2I(edge.GetWidth() - 2 * EDGE_GAP, edge.GetHeight() - 2 * EDGE_GAP))
@@ -93,6 +107,7 @@ def main(src, dst):
         obst[ref.GetLayer()].append((text_shape(ref), SILK_GAP))
 
     b.Save(dst)
+    print('silk outlines over pads removed:', len(dropped), sorted(set(dropped)))
     print('moved', len(moved), sorted(moved))
     print('hidden', hidden)
     print('no clean spot (left in place)', failed)

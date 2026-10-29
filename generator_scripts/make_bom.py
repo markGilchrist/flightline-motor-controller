@@ -1,4 +1,5 @@
-import csv, collections
+import csv, collections, sys
+OUT = sys.argv[1] if len(sys.argv) > 1 else 'out/motor_ctrl_BOM.csv'
 from design import PARTS
 rows = collections.OrderedDict()
 for p in PARTS:
@@ -9,10 +10,10 @@ for p in PARTS:
 def natkey(r):
     import re
     m = re.match(r'([A-Z]+)(\d+)', r); return (m.group(1), int(m.group(2)))
-with open('out/motor_ctrl_BOM.csv', 'w', newline='') as f:
+with open(OUT, 'w', newline='') as f:
     w = csv.writer(f)
     w.writerow(['Qty', 'References', 'Value', 'Footprint', 'Manufacturer part / notes'])
     for (val, fp, mpn), refs in sorted(rows.items(), key=lambda kv: natkey(sorted(kv[1], key=natkey)[0])):
         refs = sorted(refs, key=natkey)
         w.writerow([len(refs), ' '.join(refs), val, fp, mpn])
-print(open('out/motor_ctrl_BOM.csv').read())
+print(open(OUT).read())
