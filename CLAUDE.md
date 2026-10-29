@@ -270,7 +270,7 @@ sh $G/run_erc_gui.sh $PWD/motor_ctrl.kicad_sch && mv ERC.rpt $K/                
 kicad-cli sch export netlist -o $K/motor_ctrl.net motor_ctrl.kicad_sch
 python3 $G/compare_sch_pcb.py $K/motor_ctrl.net motor_ctrl.kicad_pcb                # expect MATCH
 (cd $G && python3 make_bom.py ../motor_ctrl_BOM.csv)
-sh firmware/test/run_tests.sh                                                       # expect ALL PASSED four times
+sh firmware/test/run_tests.sh                                                       # expect ALL PASSED six times
 ```
 
 `kicad_check/` is git-ignored scratch. The old render scripts were not re-run.
@@ -292,11 +292,26 @@ Re-running `route.py` gives a different route. If you re-route, redo the FB nudg
 - **Target:** Arduino-ESP32 core 3.x, board "ESP32S3 Dev Module", USB CDC On Boot = Enabled.
 - **PWM:** `ledcAttach(4, 20000, 10)`, 20 kHz and 10-bit.
   - Any non-zero duty below `MIN_RUN_PCT` (18%) is lifted to 18% so the motor doesn't stall at very low duty.
-- **Speed program:** the `program[]` table of `{speedPct, rampMs, holdMs}` loops forever. A speed of 0 is a pause. Ramps are linear.
+- **FlightLine app (main control, session 2):** the board is a FlightLine Decoys controller for the user's own apps, `markGilchrist/flightline-ios` and `markGilchrist/flightline-android`. The protocol was taken from their code: `Protocol/ControllerCommand.swift`, `ControllerMessage.swift`, `Services/CoreBluetoothControllerService.swift`, `ControllerSession.swift`; Android `protocol/ControllerProtocol.kt`, `bluetooth/AndroidControllerLink.kt`.
+  - BLE name `Flightline`, matched case-insensitively. Service `FFE0`, characteristic `FFE1` (HM-10 style), with props read/write/write-no-response/notify plus a `BLE2902` descriptor, which Android writes to enable notifications. Bluedroid only; NimBLE adds it itself.
+  - The app writes 5-character ASCII commands without response. The board replies by notify, one reply per notification, with no terminator.
+  - Commands: `aT?bb` → `ty<FL_DEVICE_TYPE>`. `aS?bb`/`aN?bb`/`aF?bb`/`aB?bb`/`aC?bb` → `sp<n>`/`on<n>`/`of<n>`/`XX<0|1>`/`xx<0|1>`. `aS###` speed, `aN###` on time, `aF###` off time (all 0–255; values above 255 are clamped). `axXXX`/`ayYYY` cycle on/off, `aXXXX`/`aYYYY` burst on/off.
+  - Byte stream is parsed in 5-character chunks resynced on `a`, so split or joined writes work.
+  - On connect the app sends `aT?bb`; on the type reply it writes all saved settings (`ControllerSession.writeAllSettings`).
+  - **Behaviour (inferred from the app UI; confirm on the user's boards):**
+    - Normal cycle: run at speed for the on time, then stop (park), then the off time, which counts from when stopped, then repeat.
+    - Magnet (`FL_DEVICE_TYPE` 2): cycle on = run continuously. The app ramps the speed itself every 300 ms.
+    - Burst: run continuously, overriding the cycle.
+    - Speed raw/255 → %. French (3) always runs at 100%.
+    - On time ms = n·100 + (255−n)·1000/255 with n ≥ 25, matching the app's display formula. Off time = n·100 ms.
+  - Settings are kept in `Preferences` (`flightline` namespace: speed, on, off, cycle), written 2 s after the last change. Burst is not stored.
+  - `Mode`: `MODE_APP` (start-up default, `START_MODE`), `MODE_PROGRAM` (USB `go`) and `MODE_MANUAL` (USB `s`/`stop`, pot). Any app *set* command switches to app mode.
+  - USB serial accepts the same app commands, one per line, and prints the replies.
+- **Step program (USB `go`):** the `program[]` table of `{speedPct, rampMs, holdMs}` loops forever. A speed of 0 is a pause. Ramps are linear.
 - **Battery protection:** samples every 100 ms (16-sample average via `analogReadMilliVolts`).
   - Motor cuts below 10.5 V or above 16 V.
   - It resumes above 11.5 V (and below 15.5 V), **ramping up from 0**. The ramp is frozen at 0 while faulted (session 2 fix; before that it jumped straight back to the old duty).
-- **Serial at 115200:** `s <0-100>` sets speed and stops the program, `r <ms>` sets the ramp time, `go`, `stop`, `v` prints the voltage.
+- **Serial at 115200:** app commands, plus `s <0-100>` (manual), `r <ms>` ramp time, `go`, `stop`, and `v` (voltages, mode, Bluetooth state).
 - **Optional pot:** set `USE_POT = true` to control speed from a pot on IO5 (J4). The pot sets the target and the output ramps to it over 300 ms; the bottom 2% of travel means off.
 - **Status LED:** blinks slowly while running, fast on a fault.
 - **Parking (`USE_PARK`, default on):** a program pause, `stop`, `s 0`, the pot at zero, or power-up in pot mode starts a park.
@@ -305,7 +320,7 @@ Re-running `route.py` gives a different route. If you re-route, redo the FB nudg
   - `PARK_TIMEOUT_MS` (6 s): stop anyway and print `PARK: park position not seen`.
   - A battery fault mid-park sets `parkPending`, so the park resumes after recovery. `parkedKnown` stops a repeated stop from making an extra wipe.
   - `v` prints the park-input voltage and state.
-- **Tests:** `firmware/test/run_tests.sh` compiles the sketch with host g++ (`-Wall -Wextra -Werror`) against `firmware/test/mock/Arduino.h`. That mock follows the arduino-esp32 3.3.x signatures for ledc, ADC, `min` and `constrain`. The tests run it in simulated time, with a wiper model: 300°/s crank, 15° park window, four park-switch types, and the R18‖R19×C18 filter. There are four builds: as shipped (parking), `PARK_INVERT`, `USE_PARK = false` and `USE_POT = true`.
+- **Tests:** `firmware/test/run_tests.sh` compiles the sketch with host g++ (`-Wall -Wextra -Werror`) against `firmware/test/mock/Arduino.h`. That mock follows the arduino-esp32 3.3.x signatures for ledc, ADC, `min` and `constrain`. The tests run it in simulated time, with a wiper model: 300°/s crank, 15° park window, four park-switch types, and the R18‖R19×C18 filter. There are six builds: `app` (as shipped; the test plays the phone using the app's handshake, and checks every reply with a copy of the app's parser), `magnet` (`FL_DEVICE_TYPE` 2 with the app's speed ramp), `park` and `invert` (step program from power-up), `nopark` and `pot`. The mocks include BLE (`mock/BLEDevice.h`) and `Preferences` (flash that survives a simulated reboot).
 - **Not yet compiled with the real ESP32-S3 toolchain:** the PlatformIO registry and dl.espressif.com were blocked in the session 2 environment.
 
 ---
@@ -330,7 +345,7 @@ Re-running `route.py` gives a different route. If you re-route, redo the FB nudg
 
 Done in session 2: KiCad load, zone fill, DRC, ERC, symbol↔footprint linking, Gerbers and drill files, and host-side firmware tests (see §7, §9).
 
-1. **Compile the firmware with the real toolchain** (Arduino IDE or arduino-cli, esp32 core 3.x, "ESP32S3 Dev Module"), then bench-test it.
+1. **Compile the firmware with the real toolchain** (Arduino IDE or arduino-cli, esp32 core 3.x, "ESP32S3 Dev Module"), then bench-test it with the FlightLine app on iOS and Android. Confirm the inferred cycle and burst behaviour (§6) matches the user's existing FlightLine boards. Note that a fresh iOS install has stored settings of 0, so its first connect writes speed 0. That is app behaviour: move the slider.
 2. **Open the project once in KiCad 8 or 9**, the user's likely version. Everything was checked in 7.0.11 only. Expect a format-upgrade prompt. 3D models use `${KICAD8_3DMODEL_DIR}`; the ESP32's uses `${KICAD8_3RD_PARTY}`, so it only shows if the Espressif library is installed through KiCad's Plugin and Content Manager. Rerun DRC and ERC there. Run Update PCB from Schematic: it should report no changes, since footprint paths = symbol UUIDs.
 3. **Bench-test parking with the user's actual wiper motor.** Identify its park terminals, check `v` readings at and away from park, and tune `PARK_PCT` if needed. Coasting is not modelled in the tests: a motor that overruns the park window after the cut would need a lower `PARK_PCT`, or braking.
 4. Wiper stall (jammed arm) is the main overload case. Current sensing (below) would let the firmware stop before the fuse blows.
@@ -373,3 +388,4 @@ The project is a local git repo; each step below is one commit. Nothing was push
 5. The schematic was KiCad 8 format, so KiCad 7 couldn't read it. Switched `gen_sch.py` to the KiCad 7 format. The real ERC gave 4 power-not-driven errors; added PWR_FLAGs (GND, VIN_BUCK, +3V3, VDRV). Wrote a project symbol library, deterministic UUIDs, and footprint paths for linking. Readability fixes: vertical ref/value on two-pin parts, joined stacked pairs, chained GND pins, R16/D8 moved. The PDF is now plotted by KiCad.
 6. Firmware: host mock and tests found a fault-recovery jump to full duty. Fixed it, and pot mode now ramps.
 7. The user confirmed the motor is a windscreen wiper motor, mounted in a separate device (not a car), and asked for the blades to park. Added the J5 park input (R17/R18/R19/C18 → IO7), routed it with the new `route_extra.py` and made DRC fully clean (silk arcs over pads removed). Added firmware parking with tests for four switch types.
+8. The user asked for the firmware to answer the FlightLine Controller apps, which are their own repos `flightline-ios` and `flightline-android`, attached read-only and not modified. Added BLE (FFE0/FFE1, name Flightline), the app protocol over BLE and USB, settings in flash, and app/program/manual modes. Tested with a mocked BLE stack that replays the app's handshake.

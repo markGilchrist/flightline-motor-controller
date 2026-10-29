@@ -76,18 +76,19 @@ Use wire rated for your motor current (1.5 mm² / 16 AWG for 10 A), keep the bat
 3. Plug in USB-C. If the port doesn't appear, hold **BOOT**, tap **RESET**, release **BOOT**.
 4. Upload `motor_pwm.ino`.
 
-Edit the `program[]` table to set speed, ramp time and hold time for each step. A step with speed 0 is a pause. The sequence loops forever:
+### Using the FlightLine Controller app
 
-```cpp
-Step program[] = {
-  {  40, 1500, 5000 },   // ramp to 40 % over 1.5 s, run 5 s
-  { 100, 2000, 8000 },   // ramp to full speed, run 8 s
-  {   0, 1000, 3000 },   // ramp down, PAUSE 3 s
-  ...
-};
-```
+The board works with the **FlightLine Controller** app (iOS and Android). It advertises over Bluetooth as **Flightline**, so switch it on and it appears as a card in the app.
 
-Over USB serial (115200 baud) you can also send `s 50` (set 50 %), `stop`, `go`, `r 500` (ramp time in ms) and `v` (battery and park-input voltage).
+- **Off/On (normal cycle):** runs at the set speed for the on time, parks the wiper, waits the off time, and repeats.
+- **Quick Burst:** runs continuously at the set speed until you switch it off.
+- **Speed, On Time, Off Time sliders:** take effect straight away.
+- The board saves the speed, times and Off/On switch, so after a power cut it carries on as it was. Quick Burst always starts off.
+- The board shows up in the app as a **Flapper**. To make it a **Magnet** (Off/On just runs at the set speed, with no on/off times) or a **French flapper**, change `FL_DEVICE_TYPE` near the top of the sketch to 2 or 3.
+
+The same commands also work over USB serial (115200 baud), one per line, which is handy for testing without a phone. For example, `aS128` sets the speed to 128/255 and `aS?bb` asks for it back. The full list is at the top of the sketch.
+
+Also over USB: `s 50` runs the motor at 50 % (manual), `stop` parks and stops, `r 500` sets the ramp time for `s` in ms, and `v` prints the battery and park-input voltages, the mode and the Bluetooth state. `go` runs the built-in step program in the `program[]` table (speed, ramp time and hold time per step; speed 0 is a pause). Any app command switches back to app control.
 
 If the battery drops below 10.5 V or rises above 16 V, the motor stops and the status LED blinks fast. It restarts on its own once the battery is back between 11.5 V and 15.5 V, ramping up from zero rather than jumping straight back to speed. On USB power alone the firmware sees no battery, so the motor stays off.
 

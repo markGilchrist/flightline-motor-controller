@@ -1,8 +1,11 @@
 // Host-side tests for motor_pwm.ino: builds the real sketch against mock/Arduino.h and runs it in
 // simulated time.  Build and run:  sh firmware/test/run_tests.sh
 // Test sets (chosen by run_tests.sh): default = program, battery and serial behaviour (USE_PARK off),
-// POT_TEST = speed pot, PARK_TEST = wiper parking with a model of the motor and its park switch.
+// POT_TEST = speed pot, PARK_TEST = wiper parking with a model of the motor and its park switch,
+// APP_TEST = the FlightLine app protocol over Bluetooth (the test plays the phone).
 #include "Arduino.h"
+#include "BLEDevice.h"
+#include "Preferences.h"
 
 uint32_t sim_ms = 0;
 float sim_vbat = 12.6f, sim_pot_frac = 0;
@@ -11,6 +14,10 @@ int sim_attached[64], sim_level[64];
 std::string sim_serial_in, sim_serial_out;
 SerialMock Serial;
 uint32_t (*sim_adc_hook)(uint8_t pin) = nullptr;
+std::vector<std::string> sim_ble_notified;
+SimBle sim_ble;
+std::map<std::string, uint8_t> sim_flash;
+int sim_flash_writes = 0;
 
 #ifndef SKETCH
 #define SKETCH "../motor_pwm/motor_pwm.ino"
@@ -67,12 +74,17 @@ static void run_until(uint32_t t) {
     park_filt += (park_pin_volts() - park_filt) * (1 - std::exp(-dt / 4.3));  // R18||R19 x C18
   }
 }
-static void reset_sim(float vbat) {
+// keep_flash = false: a new board; true: a reboot that keeps the saved settings
+static void reset_sim(float vbat, bool keep_flash = false) {
   sim_ms = 0; sim_vbat = vbat; sim_serial_in.clear(); sim_serial_out.clear();
   for (auto &d : sim_duty) d = 0;
   for (auto &a : sim_attached) a = 0;
+  if (!keep_flash) sim_flash.clear();
+  sim_ble_notified.clear(); sim_flash_writes = 0;
   currentPct = targetPct = startPct = 0; rampStart = stepStart = 0; rampMs = 1000;
-  stepIdx = 0; programRunning = true; faulted = false; manualRampMs = 1000;
+  stepIdx = 0; mode = START_MODE; faulted = false; manualRampMs = 1000;
+  fl = FlSettings{ 255, 25, 60, 0, 0 }; flOnPhase = false; flPhaseStart = 0;
+  motorIdle = true; idleSince = 0; flDirty = false; bleConnected = false; bleHead = bleTail = 0;
   parking = parkPending = parkedKnown = false; parkHits = 0; lastVbat = 12.0f;
   worst_jump = 0; below_min_seen = false;
   sim_adc_hook = adc_hook; park_filt = park_pin_volts();
@@ -86,13 +98,198 @@ static void reset_sim(float vbat) {
   return sim_ms - t0;
 }
 
-#if defined(POT_TEST)
+#if defined(APP_TEST) || defined(MAGNET_TEST)
+// The app's reply parser (ControllerMessage in flightline-ios / ControllerMessage.parse on Android):
+// tags are checked in this order with "contains", the tag is removed and the rest parsed as a number.
+[[maybe_unused]] static bool app_parse(const std::string &raw, std::string &tag, int &value) {
+  for (const char *t : { "ty", "xx", "XX", "on", "of", "sp" }) {
+    size_t at = raw.find(t);
+    if (at == std::string::npos) continue;
+    std::string rest = raw; rest.erase(at, 2);
+    char *end = nullptr; long v = std::strtol(rest.c_str(), &end, 10);
+    if (rest.empty() || *end != 0 || v < 0 || v > 255) return false;
+    tag = t; value = (int)v; return true;
+  }
+  return false;
+}
+// write one command and return the notification it produced ("" if none)
+[[maybe_unused]] static std::string ask(const char *cmd) {
+  size_t n = sim_ble_notified.size();
+  sim_ble_write(cmd); run_until(sim_ms + 20);
+  return sim_ble_notified.size() > n ? sim_ble_notified.back() : "";
+}
+[[maybe_unused]] static void expect_reply(const char *cmd, const char *tag, int value) {
+  std::string r = ask(cmd), t; int v = -1;
+  CHECK(app_parse(r, t, v) && t == tag && v == value, "%s -> '%s' (app reads tag '%s' value %d, wanted %s %d)",
+        cmd, r.c_str(), t.c_str(), v, tag, value);
+}
+// what the app sends right after identifying a flapper (ControllerSession.writeAllSettings)
+[[maybe_unused]] static void app_write_all(int speed, int on, int off, bool burst, bool cycle) {
+  char b[8];
+  std::snprintf(b, sizeof b, "aF%03d", off); sim_ble_write(b);
+  sim_ble_write(burst ? "aXXXX" : "aYYYY");
+  std::snprintf(b, sizeof b, "aN%03d", on); sim_ble_write(b);
+  sim_ble_write(cycle ? "axXXX" : "ayYYY");
+  std::snprintf(b, sizeof b, "aS%03d", speed); sim_ble_write(b);
+}
+[[maybe_unused]] static float pct(int raw) { return raw * 100.0f / 255.0f; }
+#endif
+
+#if defined(APP_TEST)
+int main() {
+  std::printf("Bluetooth setup matches what the apps look for\n");
+  park_type = 1; wiper_deg = 100; reset_sim(12.6f);
+  CHECK(sim_ble.name == "Flightline", "advertised name '%s'", sim_ble.name.c_str());
+  BLECharacteristic *c = sim_ble_find(0xFFE0, 0xFFE1);
+  CHECK(c != nullptr, "service FFE0 with characteristic FFE1");
+  if (!c) { std::printf("\n%d FAILED\n", failures); return 1; }
+  CHECK((c->props & BLECharacteristic::PROPERTY_WRITE_NR) && (c->props & BLECharacteristic::PROPERTY_NOTIFY),
+        "FFE1 takes writes without response and notifies (props %u)", c->props);
+  bool has2902 = false; for (auto *d : c->descriptors) has2902 |= d->uuid == 0x2902;
+  CHECK(has2902, "FFE1 has the 2902 descriptor Android writes to enable notifications");
+  CHECK(sim_ble.adv.uuids.size() == 1 && sim_ble.adv.uuids[0] == 0xFFE0 && sim_ble.advertisingStarts == 1,
+        "advertising FFE0");
+  run_until(sim_ms + 2000);
+  CHECK(duty() == 0 && mode == MODE_APP, "a new board waits in app mode with the motor off: %.1f", duty());
+
+  std::printf("handshake as the app does it\n");
+  sim_ble_connect();
+  expect_reply("aT?bb", "ty", 1);
+  app_write_all(128, 50, 30, false, false);
+  run_until(sim_ms + 500);
+  CHECK(duty() == 0, "settings alone don't start the motor: %.1f", duty());
+  expect_reply("aS?bb", "sp", 128);
+  expect_reply("aN?bb", "on", 50);
+  expect_reply("aF?bb", "of", 30);
+  expect_reply("aB?bb", "XX", 0);
+  expect_reply("aC?bb", "xx", 0);
+
+  std::printf("normal cycle: on time, park, off time, repeat\n");
+  uint32_t on_ms = 50 * 100 + (255 - 50) * 1000 / 255;      // 5.8 s
+  sim_ble_write("axXXX");
+  run_until(sim_ms + 400);
+  CHECK(std::fabs(duty() - pct(128)) < 0.5f, "cycle on: runs at speed 128 = %.1f %%: %.1f", pct(128), duty());
+  uint32_t t_on = sim_ms - 400;
+  run_until(t_on + on_ms - 100);
+  CHECK(std::fabs(duty() - pct(128)) < 0.5f, "still running near the end of the on time: %.1f", duty());
+  uint32_t took = run_until_stopped(3000);
+  CHECK(duty() == 0 && at_park_window(), "parks after the on time (%u ms after it ended), at %.0f deg",
+        took + 100, std::fmod(wiper_deg, 360.0));
+  uint32_t t_off = sim_ms;
+  run_until(t_off + 2900);
+  CHECK(duty() == 0, "off for the 3 s off time: %.1f", duty());
+  run_until(t_off + 3400);
+  CHECK(duty() > 0, "next on period starts after the off time: %.1f", duty());
+  CHECK(!below_min_seen && worst_jump < 1.0f, "ramps only (jump %.1f %% at %u ms)", worst_jump, worst_jump_at);
+
+  std::printf("speed slider while running\n");
+  sim_ble_write("aS255"); run_until(sim_ms + 400);
+  CHECK(duty() > 99, "speed 255: %.1f", duty());
+
+  std::printf("cycle off parks and stays off\n");
+  sim_ble_write("ayYYY"); run_until_stopped(3000);
+  CHECK(duty() == 0 && at_park_window(), "cycle off: parked at %.0f deg", std::fmod(wiper_deg, 360.0));
+  run_until(sim_ms + 15000); CHECK(duty() == 0, "stays off: %.1f", duty());
+
+  std::printf("quick burst\n");
+  sim_ble_write("aS200"); sim_ble_write("aXXXX"); run_until(sim_ms + 400);
+  CHECK(std::fabs(duty() - pct(200)) < 0.5f, "burst runs at the speed: %.1f", duty());
+  run_until(sim_ms + 20000);
+  CHECK(std::fabs(duty() - pct(200)) < 0.5f, "burst keeps running past the on time: %.1f", duty());
+  expect_reply("aB?bb", "XX", 1);
+  sim_ble_write("aYYYY"); run_until_stopped(3000);
+  CHECK(duty() == 0 && at_park_window(), "burst off parks: at %.0f deg", std::fmod(wiper_deg, 360.0));
+
+  std::printf("split and joined writes\n");
+  sim_ble_write("aS1"); sim_ble_write("00"); run_until(sim_ms + 20);
+  expect_reply("aS?bb", "sp", 100);
+  sim_ble_write("aN040aF010"); run_until(sim_ms + 20);
+  expect_reply("aN?bb", "on", 40);
+  expect_reply("aF?bb", "of", 10);
+  sim_ble_write("aS999"); run_until(sim_ms + 20);
+  expect_reply("aS?bb", "sp", 255);
+  sim_ble_write("junk"); sim_ble_write("aQ?bb"); run_until(sim_ms + 20);
+  expect_reply("aT?bb", "ty", 1);
+
+  std::printf("settings survive a power cut (burst does not)\n");
+  sim_ble_write("axXXX"); sim_ble_write("aXXXX"); run_until(sim_ms + 3000);
+  CHECK(sim_flash_writes > 0, "settings written to flash");
+  int writes = sim_flash_writes;
+  for (int i = 0; i < 50; i++) { char b[8]; std::snprintf(b, sizeof b, "aS%03d", 100 + i); sim_ble_write(b); run_until(sim_ms + 20); }
+  run_until(sim_ms + 2500);
+  CHECK(sim_flash_writes - writes <= 4, "a moving slider is saved once it settles (%d writes)", sim_flash_writes - writes);
+  reset_sim(12.6f, true);
+  sim_ble_connect();
+  expect_reply("aS?bb", "sp", 149);
+  expect_reply("aN?bb", "on", 40);
+  expect_reply("aF?bb", "of", 10);
+  expect_reply("aC?bb", "xx", 1);
+  expect_reply("aB?bb", "XX", 0);
+  run_until(sim_ms + 400);
+  CHECK(duty() > 0, "cycle carries on after the power cut: %.1f", duty());
+  sim_ble_write("ayYYY"); run_until_stopped(3000);
+
+  std::printf("battery fault during the cycle\n");
+  sim_ble_write("axXXX"); run_until(sim_ms + 1000);
+  sim_vbat = 10.0f; run_until(sim_ms + 150);
+  CHECK(faulted && duty() == 0, "fault stops the motor");
+  worst_jump = 0;
+  sim_vbat = 12.5f; run_until(sim_ms + 150);
+  CHECK(duty() < 25, "ramps back from 0 after the fault: %.1f", duty());
+  CHECK(worst_jump < 1.0f, "no jump (%.1f %%)", worst_jump);
+  sim_ble_write("ayYYY"); run_until_stopped(3000);
+
+  std::printf("USB serial speaks the same commands; 'go' and the app hand over cleanly\n");
+  sim_serial_out.clear(); send("aT?bb"); run_until(sim_ms + 20);
+  CHECK(sim_serial_out.find("ty1") != std::string::npos, "USB aT?bb -> '%s'", sim_serial_out.c_str());
+  send("go"); run_until(sim_ms + 3000);
+  CHECK(mode == MODE_PROGRAM && std::fabs(duty() - 40) < 0.5f, "'go' runs the step program: %.1f", duty());
+  sim_ble_write("ayYYY"); run_until_stopped(3000);
+  CHECK(mode == MODE_APP && duty() == 0, "an app command takes over again: mode %d duty %.1f", mode, duty());
+
+  std::printf("disconnect\n");
+  sim_ble_disconnect(); run_until(sim_ms + 20);
+  CHECK(sim_ble.advertisingStarts == 2 && !bleConnected, "advertises again after the phone disconnects");
+  size_t n = sim_ble_notified.size(); sim_ble_write("aT?bb"); run_until(sim_ms + 20);
+  CHECK(sim_ble_notified.size() == n, "no notifications while disconnected");
+
+  std::printf(failures ? "\n%d FAILED\n" : "\nALL PASSED\n", failures);
+  return failures ? 1 : 0;
+}
+
+#elif defined(MAGNET_TEST)
+// built with FL_DEVICE_TYPE = 2: the app's magnet card (on/off with its own speed ramp)
+int main() {
+  std::printf("magnet controller\n");
+  park_type = 1; wiper_deg = 100; reset_sim(12.6f);
+  sim_ble_connect();
+  { std::string r = ask("aT?bb"); CHECK(r == "ty2", "type reply '%s'", r.c_str()); }
+  sim_ble_write("ayYYY"); sim_ble_write("aS120"); run_until(sim_ms + 200);
+  // MagnetViewModel.setOn(true): cycle on, then speed steps down from 255 by 30 every 300 ms to the target
+  sim_ble_write("axXXX");
+  for (int v = 225; v > 120; v -= 30) { run_until(sim_ms + 300); char b[8]; std::snprintf(b, sizeof b, "aS%03d", v); sim_ble_write(b); }
+  run_until(sim_ms + 300); sim_ble_write("aS120");
+  run_until(sim_ms + 400);
+  CHECK(std::fabs(duty() - pct(120)) < 0.5f, "settles at the chosen speed: %.1f", duty());
+  run_until(sim_ms + 60000);
+  CHECK(std::fabs(duty() - pct(120)) < 0.5f, "magnet runs continuously (no on/off times): %.1f", duty());
+  // setOn(false): speed steps down to 0, then cycle off
+  for (int v = 90; v >= 0; v -= 30) { run_until(sim_ms + 300); char b[8]; std::snprintf(b, sizeof b, "aS%03d", v); sim_ble_write(b); }
+  run_until(sim_ms + 300); sim_ble_write("ayYYY");
+  run_until_stopped(3000);
+  CHECK(duty() == 0, "off after the app's ramp down: %.1f", duty());
+  CHECK(worst_jump < 1.0f && !below_min_seen, "ramps only (jump %.1f %%)", worst_jump);
+  std::printf(failures ? "\n%d FAILED\n" : "\nALL PASSED\n", failures);
+  return failures ? 1 : 0;
+}
+
+#elif defined(POT_TEST)
 // built from a copy of the sketch with USE_POT = true (parking stays on, as shipped)
 int main() {
   std::printf("speed pot (USE_POT = true)\n");
   park_type = 1; wiper_deg = 100; sim_pot_frac = 0.0f; reset_sim(12.6f);
   run_until(sim_ms + 3000);
-  CHECK(duty() == 0 && !programRunning && at_park_window(),
+  CHECK(duty() == 0 && !(mode == MODE_PROGRAM) && at_park_window(),
         "pot at zero at power-up: blades park, then off (duty %.1f, %.0f deg)", duty(), std::fmod(wiper_deg, 360.0));
   sim_pot_frac = 0.75f; run_until(sim_ms + 100);
   CHECK(duty() < 75, "pot turned fast: output ramps, not a step (%.1f)", duty());
@@ -153,7 +350,7 @@ int main() {
   park_type = 1; wiper_deg = 100; reset_sim(12.6f);
   run_until(sim_ms + 9000);                                  // running at 100 %
   send("stop"); run_until_stopped(3000);
-  CHECK(duty() == 0 && at_park_window() && !programRunning, "stop parks: duty %.1f at %.0f deg", duty(), std::fmod(wiper_deg, 360.0));
+  CHECK(duty() == 0 && at_park_window() && !(mode == MODE_PROGRAM), "stop parks: duty %.1f at %.0f deg", duty(), std::fmod(wiper_deg, 360.0));
   run_until(sim_ms + 10000); CHECK(duty() == 0, "stays stopped");
   send("stop"); run_until(sim_ms + 500);
   CHECK(duty() == 0, "'stop' when already parked does not move the wiper: %.1f", duty());
@@ -243,7 +440,7 @@ int main() {
   reset_sim(12.6f);
   run_until(sim_ms + 200);
   send("r 500"); send("s 70"); run_until(sim_ms + 250);
-  CHECK(!programRunning && manualRampMs == 500, "s/r parsed: running=%d ramp=%u", programRunning, manualRampMs);
+  CHECK(!(mode == MODE_PROGRAM) && manualRampMs == 500, "s/r parsed: running=%d ramp=%u", (mode == MODE_PROGRAM), manualRampMs);
   run_until(sim_ms + 600); CHECK(std::fabs(duty() - 70) < 0.5f, "manual 70 %%: %.1f", duty());
   run_until(sim_ms + 20000); CHECK(std::fabs(duty() - 70) < 0.5f, "program stays stopped: %.1f", duty());
   sim_serial_out.clear(); send("v"); run_until(sim_ms + 10);

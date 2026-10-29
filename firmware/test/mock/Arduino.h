@@ -8,6 +8,8 @@
 #include <cstdlib>
 #include <cmath>
 #include <string>
+#include <cstring>
+#include <cctype>
 #include <deque>
 #include <algorithm>
 
@@ -17,6 +19,12 @@ using std::max;
 #define LOW 0
 #define HIGH 1
 #define OUTPUT 0x03
+
+// FreeRTOS critical sections (single-threaded on the host)
+typedef int portMUX_TYPE;
+#define portMUX_INITIALIZER_UNLOCKED 0
+#define portENTER_CRITICAL(m) ((void)(m))
+#define portEXIT_CRITICAL(m) ((void)(m))
 
 typedef enum { ADC_0db, ADC_2_5db, ADC_6db, ADC_11db, ADC_ATTENDB_MAX } adc_attenuation_t;
 
@@ -59,6 +67,8 @@ class String {
   String &operator=(const char *s) { s_ = s; return *this; }
   bool operator==(const char *o) const { return s_ == o; }
   unsigned int length() const { return s_.size(); }
+  char operator[](unsigned int i) const { return i < s_.size() ? s_[i] : 0; }
+  const char *c_str() const { return s_.c_str(); }
   void trim() {
     size_t a = s_.find_first_not_of(" \t\r\n"), b = s_.find_last_not_of(" \t\r\n");
     s_ = (a == std::string::npos) ? "" : s_.substr(a, b - a + 1);
