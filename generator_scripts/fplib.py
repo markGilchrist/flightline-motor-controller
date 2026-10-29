@@ -1,10 +1,13 @@
 import os, math
 from kiutils.footprint import Footprint
-V='/home/claude/vendor'
+# Footprint library locations. Override with KICAD_FP_DIR (folder of *.pretty) and ESP_FP_DIR
+# (folder holding the Espressif .kicad_mod files) on a new machine.
+FP_DIR = os.environ.get('KICAD_FP_DIR', '/usr/share/kicad/footprints')
+ESP_DIR = os.environ.get('ESP_FP_DIR', '/home/user/vendor/esp')
 def fp_path(lib):
     l,n=lib.split(':')
-    if l=='Espressif': return f'{V}/esp/footprints/Espressif.pretty/{n}.kicad_mod'
-    return f'{V}/fp/{l}.pretty/{n}.kicad_mod'
+    if l=='Espressif': return f'{ESP_DIR}/{n}.kicad_mod'
+    return f'{FP_DIR}/{l}.pretty/{n}.kicad_mod'
 def load(lib):
     return Footprint.from_file(fp_path(lib))
 def bbox(fp, layers=('F.CrtYd','B.CrtYd')):

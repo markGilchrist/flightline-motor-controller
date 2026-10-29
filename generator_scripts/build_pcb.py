@@ -54,8 +54,14 @@ def make_board(routes=None):
             m.path = m.path.replace('${KISYS3DMOD}', '${KICAD8_3DMODEL_DIR}')
         if p.get('mpn'):
             fp.properties['MPN'] = p['mpn']
+        if p['ref'] == 'J3':
+            fp.clearance = 0.2    # USB-C VBUS/GND pads are 0.2 mm apart by design
+        if p['ref'] == 'U1':
+            fp.zoneConnect = 2    # solid: exposed-pad thermal vias would starve with reliefs
         for z in getattr(fp, 'zones', []) or []:
             if hasattr(z, 'tstamp'): z.tstamp = U()
+            if z.layers == ['*.Cu']:
+                z.layers = ['F.Cu', 'B.Cu']   # kiutils writes a lone '*.Cu' as (layer ..), not (layers ..)
             # footprint-embedded zones are stored in board coordinates
             for poly in z.polygons:
                 for c in poly.coordinates:
@@ -80,7 +86,9 @@ def make_board(routes=None):
     txt('ESP32 MOTOR PWM v1.0', 46.0, 74.5, 1.2, 'B.SilkS')
     txt('15A BLADE', 9.0, 44.0, 1.0)
     txt('RST', 46.0, 28.2, 0.9); txt('BOOT', 85.0, 28.2, 0.9)
-    txt('3V3 IO5 IO6 GND', 84.2, 28.2 - 3.5 + 0.0, 0.7, 'F.SilkS', None)
+    # J4 is a vertical 1x4 header: one label per pin, left of the pads
+    for i, name in enumerate(('3V3', 'IO5', 'IO6', 'GND')):
+        txt(name, 85.1, 17.5 + 2.54 * i, 0.8)
 
     # tracks
     tracks = []
