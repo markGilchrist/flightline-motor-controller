@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Arduino-ESP32 core the sketch targets (CLAUDE.md §6: core 3.x, "ESP32S3 Dev Module", USB CDC On Boot enabled)
+  ESP32_CORE_VERSION: 3.3.12
+  FQBN: esp32:esp32:esp32s3:CDCOnBoot=cdc
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # host g++ build of the sketch against the mock Arduino/BLE/Preferences API, six simulation builds
+      - name: Run firmware simulation tests
+        run: sh firmware/test/run_tests.sh
+
+      - uses: arduino/setup-arduino-cli@v2
+
+      # the esp32 core and its toolchains are large; cache them per core version
+      - name: Cache Arduino ESP32 core
+        uses: actions/cache@v4
+        with:
+          path: ~/.arduino15
+          key: arduino15-esp32-${{ env.ESP32_CORE_VERSION }}-${{ runner.os }}
+
+      - name: Install ESP32 core
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32@${ESP32_CORE_VERSION}
+
+      - name: Compile firmware for ESP32-S3
+        run: arduino-cli compile --fqbn "$FQBN" --warnings default firmware/motor_pwm
