@@ -102,6 +102,9 @@ const int N_STEPS = sizeof(program) / sizeof(program[0]);
 // Who is in charge of the motor: the app's settings, the step program, or manual 's' / pot control.
 enum Mode : uint8_t { MODE_APP, MODE_PROGRAM, MODE_MANUAL };
 const Mode START_MODE = MODE_APP;
+// where an app command came from; declared up here because the Arduino builder
+// puts its generated function prototypes before the first function definition
+enum Source : uint8_t { FROM_USB, FROM_BLE };
 
 // ---------------- state ----------------
 float currentPct = 0, targetPct = 0, startPct = 0;
@@ -237,8 +240,6 @@ void saveSettingsIfDue(uint32_t now) {
   prefs.putUChar("off", fl.offTime);
   prefs.putUChar("cycle", fl.cycle);
 }
-
-enum Source { FROM_USB, FROM_BLE };
 
 void reply(Source src, const char *text) {
   if (src == FROM_BLE) {
